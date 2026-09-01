@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-device:
     runs-on: macos-latest
 
     steps:
@@ -27,7 +27,7 @@ jobs:
         # checked into the repo.
         run: xcodegen generate
 
-      - name: Build (unsigned)
+      - name: Build (unsigned, real device)
         # CODE_SIGNING_ALLOWED=NO builds a real device (arm64) binary without
         # an Apple Developer certificate - Sideloadly/AltStore re-sign it
         # themselves with your free Apple ID at install time, which is the
@@ -58,4 +58,92 @@ jobs:
         with:
           name: GETMobile-ipa
           path: GETMobile.ipa
+          retention-days: 14
+
+  build-simulator-preview:
+    # Separate job (not a step in build-device) so a failure in one doesn't
+    # block the other - they're two independent build targets. This produces
+    # a Simulator .app, which is what browser-based previewers like
+    # Appetize.io actually accept (they explicitly do NOT support real
+    # device .ipa files, only Simulator builds). Bluetooth doesn't work in
+    # any iOS Simulator - this is for eyeballing the UI/layout before
+    # hardware arrives, not for testing the BLE connection itself.
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+
+      - name: Generate Xcode project from project.yml
+        run: xcodegen generate
+
+      - name: Build (Simulator - never needs signing, even for real distribution)
+        run: |
+          xcodebuild \
+            -project GETMobile.xcodeproj \
+            -scheme GETMobile \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath build-sim \
+            build
+
+      - name: Zip the .app for Appetize.io
+        run: |
+          APP_PATH="build-sim/Build/Products/Debug-iphonesimulator/GETMobile.app"
+          cd "$(dirname "$APP_PATH")"
+          zip -r "$OLDPWD/GETMobile-simulator-preview.zip" "$(basename "$APP_PATH")"
+
+      - name: Upload Simulator .app as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GETMobile-simulator-preview
+          path: GETMobile-simulator-preview.zip
+          retention-days: 14
+
+  # Builds a separate Simulator .app (not a real device .ipa) purely so it
+  # can be previewed in a browser via appetize.io - Appetize explicitly
+  # doesn't support real device .ipa files, only Simulator builds. This has
+  # nothing to do with real hardware: no Bluetooth works in any simulator,
+  # so this is only useful for checking the UI/layout, not testing a real
+  # bridge connection (use Sideloadly + a real device for that).
+  build-simulator-preview:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+
+      - name: Generate Xcode project from project.yml
+        run: xcodegen generate
+
+      - name: Build for Simulator
+        # No code signing needed at all for simulator builds - Apple never
+        # requires signing for anything that isn't running on real hardware.
+        run: |
+          xcodebuild \
+            -project GETMobile.xcodeproj \
+            -scheme GETMobile \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath build-sim \
+            -destination "generic/platform=iOS Simulator" \
+            build
+
+      - name: Zip the .app for Appetize
+        run: |
+          APP_PATH="build-sim/Build/Products/Debug-iphonesimulator/GETMobile.app"
+          cd "$(dirname "$APP_PATH")"
+          zip -r "$GITHUB_WORKSPACE/GETMobile-simulator.zip" "$(basename "$APP_PATH")"
+
+      - name: Upload Simulator build as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GETMobile-simulator-preview
+          path: GETMobile-simulator.zip
           retention-days: 14

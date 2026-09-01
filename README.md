@@ -25,6 +25,39 @@ result on your phone. Here's the full path from zero to "app on my iPhone":
 
 ---
 
+## Choosing a connection method
+
+The app opens to a picker with three options, all converging on the same
+6-gauge screen once connected:
+
+- **ESP32 Bridge** - the Macchina A0 / BLE-ISOTP bridge (everything
+  described below). This is the one that's been traced against real
+  firmware source and is the most solid of the three.
+- **ELM327 WiFi** - a plain TCP socket to the dongle's WiFi server (default
+  `192.168.0.10:35000`, editable in the app if yours differs). No Bluetooth
+  or MFi restrictions apply here at all - straightforward and reliable.
+- **ELM327 Bluetooth** - **only works with BLE dongles, not Classic
+  Bluetooth ones.** Most cheap ELM327 Bluetooth adapters use Classic
+  Bluetooth (SPP), which iOS blocks from third-party apps entirely without
+  Apple's MFi certification - no code fix is possible for that case. This
+  only has a chance of working if your dongle is specifically sold as
+  "BLE"/"Bluetooth 4.0"/"iOS compatible." Even then, there's no single
+  standard for how BLE ELM327 clones expose themselves over Bluetooth - this
+  tries the two most common schemes (Nordic UART Service and "HM-10 style").
+  If neither matches your dongle, it won't connect, which would mean we need
+  your dongle's exact model/chipset to add a third scheme.
+
+Both ELM327 transports speak the same ELM327 AT-command language
+(`ATSP6`/`ATSH7E0`/`ATCRA7E8` to set up UDS-over-CAN, then hex request lines
+like `22202A`) rather than the ESP32 bridge's custom binary protocol - this
+hasn't been tested against real ELM327 hardware yet, so the response parser
+was written defensively (it hunts for the actual `62`/`7F` UDS response
+bytes rather than assuming an exact prefix format) precisely because clone
+firmware varies. If parsing fails on real hardware, the raw response text is
+the first thing to look at.
+
+---
+
 ## 1. Get this project into a GitHub repository
 
 If you don't already have this project in a repo:
@@ -100,6 +133,32 @@ TestFlight) - not necessary to get started, just a convenience for later.
 
 ---
 
+## Previewing without a bridge (Demo Mode)
+
+You don't need real hardware to see the app working. On the connect screen,
+tap **"Preview Gauges (Demo Mode — no bridge needed)"** - this fills all 6
+gauges with smoothly moving synthetic values so you can check the layout,
+try the DID pickers, and flip between Needle/Digital style. A "DEMO MODE"
+banner reminds you the numbers aren't real. Tap **"Exit Demo Mode"** to go
+back to the connect screen once your bridge arrives.
+
+## Previewing in a browser (no phone needed either)
+
+The Actions run now also produces a second artifact,
+**GETMobile-simulator-preview** - a Simulator build of the app. You can
+upload this .zip to [appetize.io](https://appetize.io) (free tier) and it
+streams the running app straight into your browser tab.
+
+**Important limitation:** no simulator anywhere (Appetize or otherwise) can
+access real Bluetooth hardware - this is an iOS platform limitation, not
+specific to Appetize. This preview is for checking the UI/layout only. Use
+**Demo Mode** (above) inside that same preview to see the gauges actually
+move, since a real bridge obviously isn't reachable from a browser simulator
+either. Testing the actual BLE connection still requires Sideloadly on a
+real device once your bridge arrives.
+
+---
+
 ## Using the app
 
 1. Power on your Macchina A0 bridge and plug it into the car's OBD port.
@@ -118,19 +177,26 @@ TestFlight) - not necessary to get started, just a convenience for later.
 ## Project file reference
 
 ```
+BLE/UdsTransport.swift          Shared protocol - lets all 3 transports work interchangeably
 BLE/BridgeProtocol.swift        UUIDs, header flags, Simos18 CAN IDs (traced from firmware source)
 BLE/BridgeFrameCodec.swift      Packet encode/fragment + reassembly
-BLE/BridgeManager.swift         CoreBluetooth scan/connect/send/receive
+BLE/BridgeManager.swift         ESP32 bridge: CoreBluetooth scan/connect/send/receive
+ELM327/Elm327Protocol.swift     Shared AT-command setup + hex request/response parsing
+ELM327/Elm327WifiManager.swift  ELM327 over TCP socket (WiFi dongles)
+ELM327/Elm327BluetoothManager.swift  ELM327 over BLE (Nordic UART / HM-10 style dongles)
 UDS/UdsClient.swift             ReadDataByIdentifier (service 0x22), same as the Windows app
 Model/EquationEvaluator.swift   Port of the Windows app's equation parser
 Model/CommonDidCatalog.swift    Full DID list from parameters_22.csv + AFR/Boost-Vacuum
 Model/DidValueDecoder.swift     Raw bytes -> scaled value, ported from FormatKnownValue
-Model/GaugeSession.swift        Gauge slot state + live-poll loop
+Model/GaugeSession.swift        Gauge slot state + live-poll loop + demo mode
 Views/GaugeView.swift           The dial/digital gauge drawing
 Views/GaugeSlotCardView.swift   One gauge + its DID picker
-Views/ConnectView.swift         Scan/connect screen
+Views/TransportPickerView.swift Choose ESP32 Bridge / ELM327 WiFi / ELM327 Bluetooth / Demo
+Views/ConnectView.swift         ESP32 bridge scan/connect screen
+Views/Elm327WifiConnectView.swift      ELM327 WiFi host/port entry screen
+Views/Elm327BluetoothConnectView.swift ELM327 BLE scan/connect screen
 Views/GaugesView.swift          Main 6-gauge screen
-Views/ContentView.swift         Root view (switches connect <-> gauges)
+Views/ContentView.swift         Root view (picker <-> gauges, tracks which transport is active)
 GETMobileApp.swift              App entry point
 Resources/Theme.swift           GET brand colors
 Assets.xcassets/                App icon, logo banner, accent color
