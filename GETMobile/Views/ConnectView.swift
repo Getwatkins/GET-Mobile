@@ -1,24 +1,20 @@
 import SwiftUI
 import CoreBluetooth
 
-/// Scan/connect screen shown before a bridge is connected. Kept intentionally
-/// simple - list of nearby bridges advertising the ISO-TP service, tap to connect.
+/// Scan/connect screen for the ESP32 BLE-ISOTP bridge specifically. Reached
+/// from TransportPickerView after choosing "ESP32 Bridge".
 struct ConnectView: View {
     @ObservedObject var bridge: BridgeManager
+    var onConnected: () -> Void
 
     var body: some View {
         VStack(spacing: 20) {
-            Image("LogoBanner")
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: 280)
-                .padding(.top, 40)
-
-            Text("GET Mobile")
-                .font(.system(size: 28, weight: .bold))
+            Text("ESP32 Bridge")
+                .font(.system(size: 22, weight: .bold))
                 .foregroundColor(GETTheme.gold)
+                .padding(.top, 24)
 
-            Text("Connect to your ESP32 BLE bridge")
+            Text("Scanning for your Macchina A0 / ISO-TP bridge")
                 .font(.system(size: 14))
                 .foregroundColor(.gray)
 
@@ -57,6 +53,9 @@ struct ConnectView: View {
         }
         .background(GETTheme.background.ignoresSafeArea())
         .onAppear { bridge.startScan() }
+        .onChange(of: bridge.state) { newValue in
+            if newValue == .ready { onConnected() }
+        }
     }
 
     @ViewBuilder

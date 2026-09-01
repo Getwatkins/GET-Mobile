@@ -19,7 +19,7 @@ enum BridgeConnectionState: Equatable {
 /// thread - @MainActor just makes that explicit for the compiler and
 /// matches the MainActor-isolated view models that call into this.
 @MainActor
-final class BridgeManager: NSObject, ObservableObject {
+final class BridgeManager: NSObject, ObservableObject, UdsTransport {
     @Published private(set) var state: BridgeConnectionState = .disconnected
     @Published private(set) var discoveredNames: [String] = []
 

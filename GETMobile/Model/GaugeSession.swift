@@ -37,25 +37,41 @@ final class GaugeSlot: ObservableObject, Identifiable {
         displayText = message
         numericValue = .nan
     }
+
+    /// Generates a smoothly moving fake value inside this DID's own real
+    /// gauge range, purely so Demo Mode has something to show on the dial -
+    /// not a simulation of real engine behavior, just enough motion to see
+    /// the needle/digital styling and color changes working.
+    func applyDemoValue(entry: CommonDidEntry, elapsed: TimeInterval) {
+        let mid = (entry.progMin + entry.progMax) / 2
+        let amplitude = (entry.progMax - entry.progMin) / 2 * 0.7
+        let phase = Double(entry.did) // offsets each gauge so they don't all move in lockstep
+        let value = mid + amplitude * sin(elapsed * 0.6 + phase)
+        let rounded = (value * 100).rounded() / 100
+        numericValue = rounded
+        let unitSuffix = entry.unit.isEmpty ? "" : " \(entry.unit)"
+        displayText = "\(entry.name): \(rounded)\(unitSuffix) (demo)"
+    }
 }
 
-/// Orchestrates the 6 gauge slots and the live-read loop against the bridge,
-/// mirroring the Windows app's live-poll thread (Simos18DiagnosticsControl's
-/// btnStartLive_Click / DidPollThread).
+/// Orchestrates the 6 gauge slots and the live-read loop. Doesn't know or
+/// care which of the 3 transports (ESP32 bridge, ELM327 WiFi, ELM327 BLE)
+/// is actually connected - whichever one succeeds gets attached after the
+/// fact via `attach(transport:)`, mirroring the Windows app's live-poll
+/// thread (Simos18DiagnosticsControl's btnStartLive_Click / DidPollThread).
 @MainActor
 final class GaugeSessionViewModel: ObservableObject {
     @Published var slots: [GaugeSlot]
     @Published var isLive = false
     @Published var isDigitalStyle = false
     @Published var lastError: String?
+    @Published var isDemoMode = false
 
-    private let bridge: BridgeManager
-    private let uds: UdsClient
+    private var uds: UdsClient?
     private var liveTask: Task<Void, Never>?
+    private var demoStartTime = Date()
 
-    init(bridge: BridgeManager) {
-        self.bridge = bridge
-        self.uds = UdsClient(bridge: bridge)
+    init() {
         self.slots = [
             GaugeSlot(defaultName: "PUT"),
             GaugeSlot(defaultName: "Engine Speed"),
@@ -64,6 +80,15 @@ final class GaugeSessionViewModel: ObservableObject {
             GaugeSlot(),
             GaugeSlot(),
         ]
+    }
+
+    /// Call once a transport (any of the 3) reports it's ready.
+    func attach(transport: UdsTransport) {
+        uds = UdsClient(transport: transport)
+    }
+
+    func detach() {
+        uds = nil
     }
 
     func readOnce() {
@@ -87,9 +112,30 @@ final class GaugeSessionViewModel: ObservableObject {
         isLive = false
     }
 
+    /// Fills any slot that doesn't already have a DID picked with something
+    /// visually interesting, purely so Demo Mode shows all 6 gauges moving
+    /// instead of 3 real defaults + 3 blanks.
+    func fillBlankSlotsForDemo() {
+        let extras = ["AFR", "Boost/Vacuum", "Vehicle Speed"]
+        var extraIndex = 0
+        for slot in slots where slot.selectedEntry == nil {
+            guard extraIndex < extras.count else { break }
+            slot.selectedEntry = CommonDidCatalog.all.first { $0.name == extras[extraIndex] }
+            extraIndex += 1
+        }
+    }
+
     private func pollAllSlots() async {
         for slot in slots where slot.enabled && slot.selectedEntry != nil {
             guard let entry = slot.selectedEntry else { continue }
+
+            if isDemoMode {
+                slot.applyDemoValue(entry: entry, elapsed: Date().timeIntervalSince(demoStartTime))
+                continue
+            }
+
+            guard let uds else { continue } // no transport attached yet - shouldn't normally happen outside demo mode
+
             do {
                 let response = try await uds.readDataByIdentifier(entry.did)
                 slot.applyResponse(response)

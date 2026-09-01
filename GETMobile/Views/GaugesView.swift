@@ -4,8 +4,9 @@ import SwiftUI
 /// gauge strip + DID slot grid, just in a single scrolling column suited to
 /// a phone/tablet rather than a desktop window.
 struct GaugesView: View {
-    @ObservedObject var bridge: BridgeManager
     @ObservedObject var session: GaugeSessionViewModel
+    @Binding var demoModeActive: Bool
+    let onDisconnect: () -> Void
 
     private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
 
@@ -13,6 +14,15 @@ struct GaugesView: View {
         ScrollView {
             VStack(spacing: 16) {
                 header
+
+                if session.isDemoMode {
+                    Text("DEMO MODE — values are simulated, not from a real ECU")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.black)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                        .background(GETTheme.amber)
+                }
 
                 HStack(spacing: 12) {
                     Button(action: session.readOnce) {
@@ -50,9 +60,14 @@ struct GaugesView: View {
                         .padding(.horizontal)
                 }
 
-                Button("Disconnect", role: .destructive) {
+                Button(session.isDemoMode ? "Exit Demo Mode" : "Disconnect", role: .destructive) {
                     session.stopLive()
-                    bridge.disconnect()
+                    if session.isDemoMode {
+                        session.isDemoMode = false
+                        demoModeActive = false
+                    } else {
+                        onDisconnect()
+                    }
                 }
                 .padding(.top, 8)
                 .padding(.bottom, 24)

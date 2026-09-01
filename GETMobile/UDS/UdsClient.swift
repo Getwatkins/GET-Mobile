@@ -5,10 +5,10 @@ import Foundation
 /// Simos18 rxID/txID. The only thing that changed vs. the Windows app is
 /// the transport underneath (BLE bridge instead of a J2534 USB cable).
 final class UdsClient {
-    private let bridge: BridgeManager
+    private let transport: UdsTransport
 
-    init(bridge: BridgeManager) {
-        self.bridge = bridge
+    init(transport: UdsTransport) {
+        self.transport = transport
     }
 
     enum UdsError: Error, LocalizedError {
@@ -31,9 +31,9 @@ final class UdsClient {
         request.append(UInt8((did >> 8) & 0xFF))
         request.append(UInt8(did & 0xFF))
 
-        let response = try await bridge.sendRequest(rxID: BridgeProtocol.simos18ResponseID,
-                                                      txID: BridgeProtocol.simos18RequestID,
-                                                      payload: request)
+        let response = try await transport.sendRequest(rxID: BridgeProtocol.simos18ResponseID,
+                                                         txID: BridgeProtocol.simos18RequestID,
+                                                         payload: request)
 
         guard response.count >= 3 else { throw UdsError.malformedResponse }
         let bytes = [UInt8](response)
