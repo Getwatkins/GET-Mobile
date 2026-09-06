@@ -98,23 +98,40 @@ final class Elm327BluetoothManager: NSObject, ObservableObject, UdsTransport {
         return data
     }
 
+    /// Waits for the ECU's next complete reply (up to the next '>' prompt)
+    /// without writing anything new - used for NRC 0x78 retries, same
+    /// reasoning as the WiFi transport.
+    func waitForResponse(timeoutSeconds: Double = 2.0) async throws -> Data {
+        let raw = try await waitLine(timeoutSeconds: timeoutSeconds)
+        guard let data = Elm327Protocol.extractUdsResponse(from: raw) else { throw Elm327Error.malformedResponse }
+        return data
+    }
+
     private func sendLine(_ line: String, timeoutSeconds: Double) async throws -> String {
         guard let writeChar, let p = peripheral else { throw Elm327Error.notReady }
         guard pendingContinuation == nil else { throw Elm327Error.notReady }
 
+        let data = Data(line.utf8)
+        let mtu = p.maximumWriteValueLength(for: .withoutResponse)
+        // BLE UART modules generally expect the same MTU-chunking any
+        // BLE write does - chunk defensively rather than assume the
+        // whole command fits in one write.
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + mtu, data.count)
+            p.writeValue(data.subdata(in: offset..<end), for: writeChar, type: .withoutResponse)
+            offset = end
+        }
+
+        return try await waitLine(timeoutSeconds: timeoutSeconds)
+    }
+
+    private func waitLine(timeoutSeconds: Double) async throws -> String {
+        guard peripheral != nil else { throw Elm327Error.notReady }
+        guard pendingContinuation == nil else { throw Elm327Error.notReady }
+
         return try await withCheckedThrowingContinuation { continuation in
             self.pendingContinuation = continuation
-            let data = Data(line.utf8)
-            let mtu = p.maximumWriteValueLength(for: .withoutResponse)
-            // BLE UART modules generally expect the same MTU-chunking any
-            // BLE write does - chunk defensively rather than assume the
-            // whole command fits in one write.
-            var offset = 0
-            while offset < data.count {
-                let end = min(offset + mtu, data.count)
-                p.writeValue(data.subdata(in: offset..<end), for: writeChar, type: .withoutResponse)
-                offset = end
-            }
             self.pendingTimeoutTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
                 guard let self, !Task.isCancelled else { return }
@@ -135,7 +152,7 @@ final class Elm327BluetoothManager: NSObject, ObservableObject, UdsTransport {
     }
 }
 
-extension Elm327BluetoothManager: CBCentralManagerDelegate {
+extension Elm327BluetoothManager: @preconcurrency CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state != .poweredOn { state = .disconnected }
     }
@@ -160,7 +177,7 @@ extension Elm327BluetoothManager: CBCentralManagerDelegate {
     }
 }
 
-extension Elm327BluetoothManager: CBPeripheralDelegate {
+extension Elm327BluetoothManager: @preconcurrency CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let services = peripheral.services else {
             state = .failed("No recognized BLE-UART service found on this device - it may use classic Bluetooth (not supported) or a scheme this app doesn't know yet.")

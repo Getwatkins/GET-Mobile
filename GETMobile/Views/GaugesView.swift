@@ -6,7 +6,11 @@ import SwiftUI
 struct GaugesView: View {
     @ObservedObject var session: GaugeSessionViewModel
     @Binding var demoModeActive: Bool
+    let transport: UdsTransport?
     let onDisconnect: () -> Void
+
+    @StateObject private var flashSession = FlashSessionViewModel()
+    @State private var showFlashView = false
 
     private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
 
@@ -45,6 +49,11 @@ struct GaugesView: View {
                         .toggleStyle(.button)
                         .tint(GETTheme.amber)
                 }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .background(GETTheme.panelBackground)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(GETTheme.border, lineWidth: 1))
+                .cornerRadius(6)
 
                 LazyVGrid(columns: columns, spacing: 10) {
                     ForEach(session.slots) { slot in
@@ -58,6 +67,24 @@ struct GaugesView: View {
                         .font(.system(size: 12))
                         .foregroundColor(GETTheme.warningRed)
                         .padding(.horizontal)
+                }
+
+                if let transport, !session.isDemoMode {
+                    Button {
+                        showFlashView = true
+                    } label: {
+                        Label("Flash ECU", systemImage: "bolt.fill")
+                            .font(.system(size: 15, weight: .bold))
+                            .frame(maxWidth: .infinity)
+                            .padding(10)
+                            .background(GETTheme.warningRed)
+                            .foregroundColor(.white)
+                            .cornerRadius(6)
+                    }
+                    .padding(.horizontal)
+                    .fullScreenCover(isPresented: $showFlashView) {
+                        FlashView(session: flashSession, transport: transport, onDone: { showFlashView = false })
+                    }
                 }
 
                 Button(session.isDemoMode ? "Exit Demo Mode" : "Disconnect", role: .destructive) {

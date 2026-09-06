@@ -61,7 +61,7 @@ enum PatchBlockRunner {
         while transferAddress < data.count {
             let transferSize = blockTransferSizesPatch(patchTargetBlockNumber, transferAddress)
             let blockEnd = min(data.count, transferAddress + transferSize)
-            let chunk = data.subdata(in: data.startIndex.advanced(by: transferAddress)..<data.startIndex.advanced(by: blockEnd))
+            let chunk = Array(data[transferAddress..<blockEnd])
 
             let progress = Int(100.0 * Double(transferAddress) / Double(data.count))
             statusCallback?("PATCHING", "Patching data... ", progress)
@@ -70,7 +70,7 @@ enum PatchBlockRunner {
             while !success {
                 try? await Task.sleep(nanoseconds: 25_000_000) // 25ms, matching Thread.Sleep(25)
                 do {
-                    try await client.transferData(sequenceNumber: counter, data: chunk)
+                    try await client.transferData(sequenceNumber: counter, data: Data(chunk))
                     success = true
                     counter = UdsClient.nextTransferCounter(counter)
                 } catch is UdsNegativeResponseException {

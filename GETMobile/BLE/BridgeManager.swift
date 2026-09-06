@@ -117,12 +117,23 @@ final class BridgeManager: NSObject, ObservableObject, UdsTransport {
         }
 
         let frames = BridgeFrameEncoder.buildFrames(rxID: rxID, txID: txID, cmdFlags: 0, payload: payload, attMTU: attMTU)
+        for frame in frames {
+            p.writeValue(frame, for: char, type: .withoutResponse)
+        }
+
+        return try await waitForResponse(timeoutSeconds: timeoutSeconds)
+    }
+
+    /// Waits for the next reassembled response without writing anything -
+    /// used for ISO 14229 NRC 0x78 ("response pending") retries, where
+    /// resending the request could make the ECU restart a slow in-progress
+    /// operation instead of just continuing to wait for it.
+    func waitForResponse(timeoutSeconds: Double = 2.0) async throws -> Data {
+        guard state == .ready else { throw BridgeError.notReady }
+        guard pendingContinuation == nil else { throw BridgeError.notReady }
 
         return try await withCheckedThrowingContinuation { continuation in
             self.pendingContinuation = continuation
-            for frame in frames {
-                p.writeValue(frame, for: char, type: .withoutResponse)
-            }
             self.pendingTimeoutTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
                 guard let self, !Task.isCancelled else { return }
@@ -149,7 +160,7 @@ final class BridgeManager: NSObject, ObservableObject, UdsTransport {
 
 // MARK: - CBCentralManagerDelegate
 
-extension BridgeManager: CBCentralManagerDelegate {
+extension BridgeManager: @preconcurrency CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state != .poweredOn { state = .disconnected }
     }
@@ -181,7 +192,7 @@ extension BridgeManager: CBCentralManagerDelegate {
 
 // MARK: - CBPeripheralDelegate
 
-extension BridgeManager: CBPeripheralDelegate {
+extension BridgeManager: @preconcurrency CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let service = peripheral.services?.first(where: { $0.uuid == BridgeProtocol.serviceUUID }) else {
             state = .failed("Bridge service not found"); return

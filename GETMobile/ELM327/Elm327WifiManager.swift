@@ -81,13 +81,29 @@ final class Elm327WifiManager: NSObject, ObservableObject, UdsTransport {
         return data
     }
 
+    /// Waits for the ECU's next complete reply line (up to the next '>'
+    /// prompt) without sending anything new - used for NRC 0x78 retries.
+    /// The adapter itself is just a transparent relay, so a 0x78 comes back
+    /// as one complete line, and the real answer arrives later as a
+    /// separate complete line - same underlying situation as the BLE bridge.
+    func waitForResponse(timeoutSeconds: Double = 2.0) async throws -> Data {
+        let raw = try await waitLine(timeoutSeconds: timeoutSeconds)
+        guard let data = Elm327Protocol.extractUdsResponse(from: raw) else { throw Elm327Error.malformedResponse }
+        return data
+    }
+
     private func sendLine(_ line: String, timeoutSeconds: Double) async throws -> String {
         guard let connection else { throw Elm327Error.notReady }
+        connection.send(content: line.data(using: .ascii), completion: .contentProcessed { _ in })
+        return try await waitLine(timeoutSeconds: timeoutSeconds)
+    }
+
+    private func waitLine(timeoutSeconds: Double) async throws -> String {
+        guard connection != nil else { throw Elm327Error.notReady }
         guard pendingContinuation == nil else { throw Elm327Error.notReady }
 
         return try await withCheckedThrowingContinuation { continuation in
             self.pendingContinuation = continuation
-            connection.send(content: line.data(using: .ascii), completion: .contentProcessed { _ in })
             self.pendingTimeoutTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
                 guard let self, !Task.isCancelled else { return }

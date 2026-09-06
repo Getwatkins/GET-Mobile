@@ -5,8 +5,19 @@ import Foundation
 /// an ELM327 BLE dongle all implement this the same way from the app's
 /// point of view, even though the wire protocol underneath each one is
 /// completely different.
+@MainActor
 protocol UdsTransport: AnyObject {
     func sendRequest(rxID: UInt16, txID: UInt16, payload: Data, timeoutSeconds: Double) async throws -> Data
+
+    /// Waits for another response on the currently-outstanding request
+    /// *without* resending it. Needed because ISO 14229's NRC 0x78
+    /// ("response pending") means "I'm still working, keep waiting" - the
+    /// client must not resend, or the ECU may treat it as a brand new
+    /// request and restart whatever slow operation (e.g. flash erase) it
+    /// was already partway through. This is a routine occurrence during
+    /// flashing, not an edge case.
+    func waitForResponse(timeoutSeconds: Double) async throws -> Data
+
     func disconnect()
 }
 

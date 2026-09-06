@@ -51,8 +51,8 @@ enum FlashBlockRunner {
             let progress = Int((100.0 * Double(end) / Double(data.count) * 10).rounded() / 10)
             statusCallback?("FLASHING", "Transferring data... ", progress)
 
-            let chunk = data.subdata(in: data.startIndex.advanced(by: baseAddress)..<data.startIndex.advanced(by: end))
-            try await client.transferData(sequenceNumber: counter, data: chunk)
+            let chunk = Array(data[baseAddress..<end])
+            try await client.transferData(sequenceNumber: counter, data: Data(chunk))
             counter = UdsClient.nextTransferCounter(counter)
 
             baseAddress += transferSize

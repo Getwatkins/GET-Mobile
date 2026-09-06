@@ -114,7 +114,7 @@ enum BlockPreparer {
                         asw1Bytes: asw1Bytes, calBytes: binaryData, calBaseAddress: baseAddresses[calBlockNumber]!)
                 } else if let loc = softwareVersionLocation[calBlockNumber] {
                     addresses = Ecm3Checksum.loadEcm3Location(
-                        calBytes: binaryData, softwareVersionLocation: loc, boxCodesCsvPath: boxCodesCsvPath)
+                        calBytes: binaryData, softwareVersionLocationCal: loc, boxCodesCsvPath: boxCodesCsvPath)
                 }
 
                 guard let resolvedAddresses = addresses else {

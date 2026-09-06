@@ -18,7 +18,6 @@ struct GaugeSlotCardView: View {
                 warnMax: nil,
                 isDigitalStyle: isDigitalStyle
             )
-            .frame(height: 150)
 
             Picker("DID", selection: Binding(
                 get: { slot.selectedEntry },

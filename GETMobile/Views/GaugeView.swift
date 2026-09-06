@@ -113,6 +113,7 @@ struct GaugeView: View {
             }
         }
         .aspectRatio(1, contentMode: .fit)
+        .clipped()
     }
 
     private var formattedValue: String {
