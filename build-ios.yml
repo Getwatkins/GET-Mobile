@@ -1,0 +1,104 @@
+name: Build iOS App
+
+# Runs on every push to main, and can also be triggered manually from the
+# Actions tab (the "Run workflow" button) whenever you just want a fresh
+# build without pushing a new commit.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-device:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        # HOMEBREW_NO_AUTO_UPDATE skips brew's own self-update step, which is
+        # slow and unnecessary here - shaves a couple minutes off every run.
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+
+      - name: Generate Xcode project from project.yml
+        # There's no local Xcode to run "File > New > Project" in, so the
+        # .xcodeproj is generated fresh on every build instead of being
+        # checked into the repo.
+        run: xcodegen generate
+
+      - name: Build (unsigned, real device)
+        # CODE_SIGNING_ALLOWED=NO builds a real device (arm64) binary without
+        # an Apple Developer certificate - Sideloadly/AltStore re-sign it
+        # themselves with your free Apple ID at install time, which is the
+        # standard way unsigned CI builds like this get onto a real device.
+        run: |
+          xcodebuild \
+            -project GETMobile.xcodeproj \
+            -scheme GETMobile \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package .ipa
+        # An .ipa is just a zip of a "Payload" folder containing the .app -
+        # this is the exact structure Sideloadly/AltStore/Xcode all expect.
+        run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/GETMobile.app"
+          mkdir -p Payload
+          cp -r "$APP_PATH" Payload/
+          zip -r GETMobile.ipa Payload
+
+      - name: Upload .ipa as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GETMobile-ipa
+          path: GETMobile.ipa
+          retention-days: 14
+
+  build-simulator-preview:
+    # Separate job (not a step in build-device) so a failure in one doesn't
+    # block the other - they're two independent build targets. This produces
+    # a Simulator .app, which is what browser-based previewers like
+    # Appetize.io actually accept (they explicitly do NOT support real
+    # device .ipa files, only Simulator builds). Bluetooth doesn't work in
+    # any iOS Simulator - this is for eyeballing the UI/layout before
+    # hardware arrives, not for testing the BLE connection itself.
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+
+      - name: Generate Xcode project from project.yml
+        run: xcodegen generate
+
+      - name: Build (Simulator - never needs signing, even for real distribution)
+        run: |
+          xcodebuild \
+            -project GETMobile.xcodeproj \
+            -scheme GETMobile \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath build-sim \
+            build
+
+      - name: Zip the .app for Appetize.io
+        run: |
+          APP_PATH="build-sim/Build/Products/Debug-iphonesimulator/GETMobile.app"
+          cd "$(dirname "$APP_PATH")"
+          zip -r "$OLDPWD/GETMobile-simulator-preview.zip" "$(basename "$APP_PATH")"
+
+      - name: Upload Simulator .app as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GETMobile-simulator-preview
+          path: GETMobile-simulator-preview.zip
+          retention-days: 14
