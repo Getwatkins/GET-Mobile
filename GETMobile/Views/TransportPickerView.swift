@@ -4,6 +4,7 @@ enum ConnectionKind {
     case esp32Bridge
     case elm327Wifi
     case elm327Bluetooth
+    case gvretWifi
 }
 
 /// First screen shown: pick which hardware you're connecting through. Each
@@ -13,6 +14,7 @@ struct TransportPickerView: View {
     @ObservedObject var bridge: BridgeManager
     @ObservedObject var elm327Wifi: Elm327WifiManager
     @ObservedObject var elm327Bluetooth: Elm327BluetoothManager
+    @ObservedObject var gvretWifi: GvretWifiManager
     var onConnected: (ConnectionKind, UdsTransport) -> Void
     var onPreviewDemo: () -> Void
 
@@ -53,6 +55,13 @@ struct TransportPickerView: View {
                     } label: {
                         optionRow(icon: "dot.radiowaves.left.and.right", title: "ELM327 Bluetooth",
                                   subtitle: "BLE dongles only - not Classic Bluetooth")
+                    }
+
+                    NavigationLink {
+                        GvretWifiConnectView(manager: gvretWifi) { onConnected(.gvretWifi, gvretWifi) }
+                    } label: {
+                        optionRow(icon: "antenna.radiowaves.left.and.right", title: "Macchina A0 (WiFi)",
+                                  subtitle: "SavvyCAN / GVRET protocol - for a bridge stuck in WiFi mode")
                     }
                 }
                 .padding(.horizontal)

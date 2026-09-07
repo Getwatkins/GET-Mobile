@@ -4,6 +4,7 @@ struct ContentView: View {
     @StateObject private var bridge = BridgeManager()
     @StateObject private var elm327Wifi = Elm327WifiManager()
     @StateObject private var elm327Bluetooth = Elm327BluetoothManager()
+    @StateObject private var gvretWifi = GvretWifiManager()
     @StateObject private var session = GaugeSessionViewModel()
 
     @State private var demoModeActive = false
@@ -14,6 +15,7 @@ struct ContentView: View {
         case .esp32Bridge: return bridge.state == .ready
         case .elm327Wifi: return elm327Wifi.state == .ready
         case .elm327Bluetooth: return elm327Bluetooth.state == .ready
+        case .gvretWifi: return gvretWifi.state == .ready
         case .none: return false
         }
     }
@@ -25,6 +27,7 @@ struct ContentView: View {
         case .esp32Bridge: return bridge
         case .elm327Wifi: return elm327Wifi
         case .elm327Bluetooth: return elm327Bluetooth
+        case .gvretWifi: return gvretWifi
         case .none: return nil
         }
     }
@@ -38,6 +41,7 @@ struct ContentView: View {
                     bridge: bridge,
                     elm327Wifi: elm327Wifi,
                     elm327Bluetooth: elm327Bluetooth,
+                    gvretWifi: gvretWifi,
                     onConnected: { kind, transport in
                         activeKind = kind
                         session.attach(transport: transport)
@@ -61,6 +65,7 @@ struct ContentView: View {
         case .esp32Bridge: bridge.disconnect()
         case .elm327Wifi: elm327Wifi.disconnect()
         case .elm327Bluetooth: elm327Bluetooth.disconnect()
+        case .gvretWifi: gvretWifi.disconnect()
         case .none: break
         }
         activeKind = nil
