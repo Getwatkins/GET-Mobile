@@ -96,18 +96,35 @@ enum GvretProtocol {
     static func getNumBusesCommand() -> [UInt8] { [commandPrefix, Command.getNumBuses.rawValue] }
 
     /// Streaming parser for incoming bytes from the device - mirrors
-    /// processIncomingByte's IDLE/GET_COMMAND/frame-body state machine, but
-    /// only for the one reply type this app actually needs to read back:
-    /// incoming CAN frames (frame type 0). Other reply types (dev info,
-    /// canbus params, keepalive ack, etc.) are recognized and skipped
-    /// rather than decoded, since nothing here currently needs them beyond
-    /// initial setup acknowledgement.
+    /// processIncomingByte's IDLE/GET_COMMAND/frame-body state machine.
+    /// Every reply type this client's setup sequence can trigger has a
+    /// specific, known length (confirmed against the firmware's actual
+    /// reply-building code, not guessed) and must be fully consumed even
+    /// though this client doesn't use the contents - skipping the wrong
+    /// number of bytes here desyncs the whole stream from that point
+    /// forward, since the next byte(s) of a longer-than-expected reply
+    /// would otherwise be misread as the start of the next message.
     final class FrameParser {
-        private enum State { case idle, gotPrefix, frameBody }
+        private enum State { case idle, gotPrefix, frameBody, skipBody }
         private var state: State = .idle
         private var commandByte: UInt8 = 0
         private var body: [UInt8] = []
         private var expectedBodyLength = 0
+        private var skipRemaining = 0
+
+        /// Bytes remaining after the [0xF1][commandByte] header for each
+        /// non-frame reply type, taken directly from gvret_comm.cpp's
+        /// reply-building code for each case (PROTO_TIME_SYNC=1,
+        /// PROTO_GET_CANBUS_PARAMS=6, PROTO_GET_DEV_INFO=7,
+        /// PROTO_KEEPALIVE=9, PROTO_GET_NUMBUSES=12, PROTO_GET_EXT_BUSES=13).
+        private static let knownReplyBodyLengths: [UInt8: Int] = [
+            1: 4,   // TIME_SYNC: 4 bytes (32-bit timestamp)
+            6: 9,   // GET_CANBUS_PARAMS: enabled+listenonly, 4 bytes CAN0 speed, 1 pad, 4 bytes CAN1 speed
+            7: 6,   // GET_DEV_INFO: build num (2), 0x20, 3 more bytes
+            9: 2,   // KEEPALIVE: 0xDE 0xAD
+            12: 1,  // GET_NUMBUSES: bus count
+            13: 15, // GET_EXT_BUSES: 15 zero bytes
+        ]
 
         /// Feed one incoming byte. Returns a decoded CanFrame whenever a
         /// complete "incoming canbus frame" (command byte 0) message finishes.
@@ -127,14 +144,29 @@ enum GvretProtocol {
                 if commandByte == 0 {
                     // Incoming CAN frame: 4 timestamp + 4 id + 1 lenbus + data(len) + 1 checksum
                     body = []
-                    expectedBodyLength = 4 + 4 + 1 // up to and including the length/bus byte; data+checksum length is data-dependent, resolved once we've read the length byte
+                    expectedBodyLength = 4 + 4 + 1 // resolved further once we've read the length byte
                     state = .frameBody
+                } else if let knownLength = Self.knownReplyBodyLengths[commandByte] {
+                    if knownLength > 0 {
+                        skipRemaining = knownLength
+                        state = .skipBody
+                    } else {
+                        state = .idle
+                    }
                 } else {
-                    // Not a frame - these replies are fixed/short and not
-                    // needed by this client; drop back to idle immediately
-                    // rather than trying to track every reply's exact length.
+                    // Unrecognized reply type - we don't know its length,
+                    // so the safest option is to drop back to idle and
+                    // resync on the next 0xF1 rather than guess and risk
+                    // desyncing further. This client never sends a command
+                    // that triggers an unknown reply type during normal
+                    // operation, so this path shouldn't be hit in practice.
                     state = .idle
                 }
+                return nil
+
+            case .skipBody:
+                skipRemaining -= 1
+                if skipRemaining <= 0 { state = .idle }
                 return nil
 
             case .frameBody:
