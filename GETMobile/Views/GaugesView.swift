@@ -11,6 +11,7 @@ struct GaugesView: View {
 
     @StateObject private var flashSession = FlashSessionViewModel()
     @State private var showFlashView = false
+    @State private var showGvretLog = false
 
     private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
 
@@ -84,6 +85,25 @@ struct GaugesView: View {
                     .padding(.horizontal)
                     .fullScreenCover(isPresented: $showFlashView) {
                         FlashView(session: flashSession, transport: transport, onDone: { showFlashView = false })
+                    }
+                }
+
+                if let gvret = transport as? GvretWifiManager {
+                    Button {
+                        showGvretLog = true
+                    } label: {
+                        Label("GVRET Diagnostic Log", systemImage: "list.bullet.rectangle")
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(8)
+                            .background(GETTheme.panelBackground)
+                            .foregroundColor(GETTheme.amber)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(GETTheme.amber, lineWidth: 1))
+                            .cornerRadius(6)
+                    }
+                    .padding(.horizontal)
+                    .sheet(isPresented: $showGvretLog) {
+                        GvretDebugLogView(manager: gvret)
                     }
                 }
 

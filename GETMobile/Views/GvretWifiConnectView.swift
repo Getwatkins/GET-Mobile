@@ -51,6 +51,27 @@ struct GvretWifiConnectView: View {
             }
             .padding(.horizontal)
 
+            if !manager.debugLog.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Diagnostic log").font(.system(size: 12, weight: .bold)).foregroundColor(.gray)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(manager.debugLog.enumerated()), id: \.offset) { _, line in
+                                Text(line)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(.green)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(height: 220)
+                    .padding(8)
+                    .background(GETTheme.panelBackground)
+                    .cornerRadius(6)
+                }
+                .padding(.horizontal)
+            }
+
             Spacer()
         }
         .background(GETTheme.background.ignoresSafeArea())

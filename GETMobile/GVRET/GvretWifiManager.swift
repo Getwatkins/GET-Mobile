@@ -9,6 +9,11 @@ import Network
 final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
     @Published private(set) var state: BridgeConnectionState = .disconnected
 
+    /// Raw diagnostic trail - every command we send, and every CAN frame we
+    /// see (matching or not) - surfaced in the UI so a real connection can
+    /// actually be debugged against real traffic instead of guessing blind.
+    @Published private(set) var debugLog: [String] = []
+
     private var connection: NWConnection?
     private let parser = GvretProtocol.FrameParser()
 
@@ -77,11 +82,38 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
     }
 
     private func setup() async {
+        log("Sending binary-mode handshake (0xE7 0xE7)")
         rawWrite(GvretProtocol.binaryModeHandshake)
         try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Match real SavvyCAN's exact init preamble before doing anything
+        // else ("Write to serial -> e7 e7 f1 c f1 6 f1 7 f1 1 f1 9" from
+        // observed SavvyCAN traffic) - GET_NUM_BUSES, GET_CANBUS_PARAMS,
+        // GET_DEV_INFO, TIME_SYNC, KEEPALIVE. Deviating from what the
+        // reference client actually does risks hitting an uninitialized
+        // code path in firmware internals this app can't see from source
+        // alone, so this mirrors it exactly rather than skip straight to
+        // SETUP_CANBUS as an earlier version of this code did.
+        log("Sending SavvyCAN-style init preamble (GET_NUM_BUSES, GET_CANBUS_PARAMS, GET_DEV_INFO, TIME_SYNC, KEEPALIVE)")
+        rawWrite(GvretProtocol.getNumBusesCommand())
+        rawWrite([GvretProtocol.commandPrefix, GvretProtocol.Command.getCanbusParams.rawValue])
+        rawWrite(GvretProtocol.getDevInfoCommand())
+        rawWrite([GvretProtocol.commandPrefix, GvretProtocol.Command.timeSync.rawValue])
+        rawWrite(GvretProtocol.keepAliveCommand())
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        log("Sending SETUP_CANBUS: bus0 = 500000 baud, enabled")
         rawWrite(GvretProtocol.setupCanbusCommand(bus0Speed: 500_000, bus0Enabled: true))
         try? await Task.sleep(nanoseconds: 300_000_000) // let the firmware actually bring CAN0 up before we start using it
+
+        log("Setup complete - ready")
         state = .ready
+    }
+
+    private func log(_ message: String) {
+        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        debugLog.append("[\(timestamp)] \(message)")
+        if debugLog.count > 500 { debugLog.removeFirst(debugLog.count - 500) }
     }
 
     // MARK: UdsTransport
@@ -110,6 +142,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
 
     private func sendCanFrame(id: UInt32, data: [UInt8]) async throws {
         guard connection != nil else { throw GvretError.notReady }
+        log("TX CAN id=0x\(String(id, radix: 16, uppercase: true)) data=\(hexString(data))")
         let frame = GvretProtocol.CanFrame(id: id, extended: false, bus: 0, data: data)
         rawWrite(GvretProtocol.buildCanFrameCommand(frame))
     }
@@ -119,6 +152,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         guard pendingFrameContinuation == nil else { throw GvretError.notReady }
 
         pendingFrameRxID = rxID
+        log("Waiting up to \(timeoutSeconds)s for a CAN frame with id=0x\(String(rxID, radix: 16, uppercase: true))")
         return await withCheckedContinuation { continuation in
             self.pendingFrameContinuation = continuation
             self.pendingTimeoutTask = Task { [weak self] in
@@ -126,6 +160,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
                 guard let self, !Task.isCancelled else { return }
                 if let cont = self.pendingFrameContinuation {
                     self.pendingFrameContinuation = nil
+                    self.log("Timed out waiting for id=0x\(String(rxID, radix: 16, uppercase: true)) - no matching frame arrived in \(timeoutSeconds)s")
                     cont.resume(returning: nil)
                 }
             }
@@ -141,8 +176,11 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
             Task { @MainActor in
                 guard let self else { return }
                 if let data, !data.isEmpty {
+                    self.log("RX raw bytes: \(self.hexString([UInt8](data)))")
                     for byte in data {
                         if let frame = self.parser.feed(byte) {
+                            self.log("RX CAN id=0x\(String(frame.id, radix: 16, uppercase: true)) data=\(self.hexString(frame.data))" +
+                                     (frame.id == self.pendingFrameRxID ? " (matches what we're waiting for)" : " (not what we're waiting for - ignored)"))
                             self.handleIncomingFrame(frame)
                         }
                     }
@@ -150,10 +188,15 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
                 if error == nil, !isComplete {
                     self.startReceiving()
                 } else if isComplete {
+                    self.log("Connection closed by remote side")
                     self.state = .disconnected
                 }
             }
         }
+    }
+
+    private func hexString(_ bytes: [UInt8]) -> String {
+        bytes.map { String(format: "%02X", $0) }.joined(separator: " ")
     }
 
     private func handleIncomingFrame(_ frame: GvretProtocol.CanFrame) {
