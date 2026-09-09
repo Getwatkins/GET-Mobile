@@ -67,7 +67,7 @@ enum GvretProtocol {
     }
 
     static func setupCanbusCommand(bus0Speed: UInt32, bus0Enabled: Bool) -> [UInt8] {
-        [commandPrefix, Command.setupCanbus.rawValue] + setupCanbusPayload(bus0Speed: bus0Speed, bus0Enabled: bus0Enabled)
+        [commandPrefix, Command.setupCanbus.rawValue] + setupCanbusPayload(bus0Speed: bus0Speed, bus0Enabled: bus0Enabled) + [0x00]
     }
 
     /// Mirrors BUILD_CAN_FRAME's exact byte layout (gvret_comm.cpp case
@@ -121,7 +121,7 @@ enum GvretProtocol {
             1: 4,   // TIME_SYNC: 4 bytes (32-bit timestamp)
             6: 10,  // GET_CANBUS_PARAMS: flags (1), CAN0 speed (4), pad (1), CAN1 speed (4)
             7: 6,   // GET_DEV_INFO: build num (2), 0x20, 3 more bytes
-            9: 2,   // KEEPALIVE: 0xDE 0xAD
+            9: 0,   // KEEPALIVE/validation: no reply body; command only resets validation state
             12: 1,  // GET_NUMBUSES: bus count
             13: 15, // GET_EXT_BUSES: 15 zero bytes
         ]

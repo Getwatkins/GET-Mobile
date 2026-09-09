@@ -14,5 +14,11 @@ assert actual == expected, f"GVRET TX mismatch: {actual.hex(' ')}"
 # flags (1) + CAN0 speed (4) + pad (1) + CAN1 speed (4).
 assert len(bytes.fromhex("01 20 A1 07 00 00 00 00 00 00")) == 10
 
+# SavvyCAN/A0RET SETUP_CANBUS command includes an additional trailing
+# terminator byte after the two 32-bit bus configuration words.
+setup = bytes([0xF1, 0x05]) + bytes.fromhex("20 A1 07 C0 00 00 00 00") + bytes([0x00])
+assert len(setup) == 11
+assert setup.hex(" ").upper() == "F1 05 20 A1 07 C0 00 00 00 00 00"
+
 print("GVRET regression checks passed.")
 print("TX:", actual.hex(" ").upper())
