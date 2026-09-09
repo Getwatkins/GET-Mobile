@@ -83,7 +83,12 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
 
     private func setup() async {
         log("Sending binary-mode handshake (0xE7 0xE7)")
-        rawWrite(GvretProtocol.binaryModeHandshake)
+        do {
+            try await rawWrite(GvretProtocol.binaryModeHandshake, label: "GVRET handshake")
+        } catch {
+            failConnection("GVRET handshake send failed: \(error.localizedDescription)")
+            return
+        }
         try? await Task.sleep(nanoseconds: 200_000_000)
 
         // Match real SavvyCAN's exact init preamble before doing anything
@@ -95,15 +100,25 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         // alone, so this mirrors it exactly rather than skip straight to
         // SETUP_CANBUS as an earlier version of this code did.
         log("Sending SavvyCAN-style init preamble (GET_NUM_BUSES, GET_CANBUS_PARAMS, GET_DEV_INFO, TIME_SYNC, KEEPALIVE)")
-        rawWrite(GvretProtocol.getNumBusesCommand())
-        rawWrite([GvretProtocol.commandPrefix, GvretProtocol.Command.getCanbusParams.rawValue])
-        rawWrite(GvretProtocol.getDevInfoCommand())
-        rawWrite([GvretProtocol.commandPrefix, GvretProtocol.Command.timeSync.rawValue])
-        rawWrite(GvretProtocol.keepAliveCommand())
+        do {
+            try await rawWrite(GvretProtocol.getNumBusesCommand(), label: "GET_NUM_BUSES")
+            try await rawWrite([GvretProtocol.commandPrefix, GvretProtocol.Command.getCanbusParams.rawValue], label: "GET_CANBUS_PARAMS")
+            try await rawWrite(GvretProtocol.getDevInfoCommand(), label: "GET_DEV_INFO")
+            try await rawWrite([GvretProtocol.commandPrefix, GvretProtocol.Command.timeSync.rawValue], label: "TIME_SYNC")
+            try await rawWrite(GvretProtocol.keepAliveCommand(), label: "KEEPALIVE")
+        } catch {
+            failConnection("GVRET init send failed: \(error.localizedDescription)")
+            return
+        }
         try? await Task.sleep(nanoseconds: 300_000_000)
 
-        log("Sending SETUP_CANBUS: bus0 = 500000 baud, enabled")
-        rawWrite(GvretProtocol.setupCanbusCommand(bus0Speed: 500_000, bus0Enabled: true))
+        log("Sending SETUP_CANBUS: bus0 = 500000 baud, enabled, transmit mode")
+        do {
+            try await rawWrite(GvretProtocol.setupCanbusCommand(bus0Speed: 500_000, bus0Enabled: true), label: "SETUP_CANBUS")
+        } catch {
+            failConnection("SETUP_CANBUS send failed: \(error.localizedDescription)")
+            return
+        }
         try? await Task.sleep(nanoseconds: 300_000_000) // let the firmware actually bring CAN0 up before we start using it
 
         log("Setup complete - ready")
@@ -144,7 +159,30 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         guard connection != nil else { throw GvretError.notReady }
         log("TX CAN id=0x\(String(id, radix: 16, uppercase: true)) data=\(hexString(data))")
         let frame = GvretProtocol.CanFrame(id: id, extended: false, bus: 0, data: data)
-        rawWrite(GvretProtocol.buildCanFrameCommand(frame))
+        let bytes = GvretProtocol.buildCanFrameCommand(frame)
+        try await rawWrite(bytes, label: "CAN 0x\(String(id, radix: 16, uppercase: true))")
+    }
+
+    /// Sends the exact 8-byte diagnostic frame used to isolate A0 CAN TX:
+    /// CAN 0x7E0, payload 03 22 20 2A AA AA AA AA. This deliberately bypasses
+    /// ISO-TP so SavvyCAN and GET Mobile can be compared byte-for-byte.
+    func sendRawCanDiagnosticTest() async {
+        guard state == .ready else {
+            log("RAW CAN TEST: transport is not ready")
+            return
+        }
+
+        let payload: [UInt8] = [0x03, 0x22, 0x20, 0x2A, 0xAA, 0xAA, 0xAA, 0xAA]
+        do {
+            let frame = GvretProtocol.CanFrame(id: 0x7E0, extended: false, bus: 0, data: payload)
+            let bytes = GvretProtocol.buildCanFrameCommand(frame)
+            log("RAW CAN TEST: sending 0x7E0 / 8 bytes: \(hexString(payload))")
+            log("RAW CAN TEST GVRET bytes: \(hexString(bytes))")
+            try await rawWrite(bytes, label: "RAW CAN TEST 0x7E0")
+            log("RAW CAN TEST: TCP send accepted; watch for ECU response on 0x7E8")
+        } catch {
+            log("RAW CAN TEST: TCP send failed: \(error.localizedDescription)")
+        }
     }
 
     private func receiveCanFrame(matching rxID: UInt32, timeoutSeconds: Double) async throws -> [UInt8]? {
@@ -167,8 +205,29 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         }
     }
 
-    private func rawWrite(_ bytes: [UInt8]) {
-        connection?.send(content: Data(bytes), completion: .contentProcessed { _ in })
+    private func rawWrite(_ bytes: [UInt8], label: String) async throws {
+        guard let connection else { throw GvretError.notReady }
+
+        log("TX GVRET [\(label)]: \(hexString(bytes))")
+
+        try await withCheckedThrowingContinuation { continuation in
+            connection.send(content: Data(bytes), completion: .contentProcessed { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            })
+        }
+
+        log("TX GVRET [\(label)]: TCP send accepted")
+    }
+
+    private func failConnection(_ message: String) {
+        log(message)
+        state = .failed(message)
+        connection?.cancel()
+        connection = nil
     }
 
     private func startReceiving() {

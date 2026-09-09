@@ -119,7 +119,7 @@ enum GvretProtocol {
         /// PROTO_KEEPALIVE=9, PROTO_GET_NUMBUSES=12, PROTO_GET_EXT_BUSES=13).
         private static let knownReplyBodyLengths: [UInt8: Int] = [
             1: 4,   // TIME_SYNC: 4 bytes (32-bit timestamp)
-            6: 9,   // GET_CANBUS_PARAMS: enabled+listenonly, 4 bytes CAN0 speed, 1 pad, 4 bytes CAN1 speed
+            6: 10,  // GET_CANBUS_PARAMS: flags (1), CAN0 speed (4), pad (1), CAN1 speed (4)
             7: 6,   // GET_DEV_INFO: build num (2), 0x20, 3 more bytes
             9: 2,   // KEEPALIVE: 0xDE 0xAD
             12: 1,  // GET_NUMBUSES: bus count

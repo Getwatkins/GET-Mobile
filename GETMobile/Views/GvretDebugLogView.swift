@@ -33,6 +33,12 @@ struct GvretDebugLogView: View {
             .navigationTitle("GVRET Diagnostic Log")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("CAN TX Test") {
+                        Task { await manager.sendRawCanDiagnosticTest() }
+                    }
+                    .disabled(manager.state != .ready)
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
