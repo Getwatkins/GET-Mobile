@@ -72,6 +72,7 @@ struct GaugesView: View {
 
                 if let transport, !session.isDemoMode {
                     Button {
+                        session.stopLive()
                         showFlashView = true
                     } label: {
                         Label("Flash ECU", systemImage: "bolt.fill")

@@ -71,6 +71,17 @@ final class GaugeSessionViewModel: ObservableObject {
     private var liveTask: Task<Void, Never>?
     private var demoStartTime = Date()
 
+    /// Guards pollAllSlots() itself (not just readOnce/startLive
+    /// individually) so no two poll cycles can ever run concurrently and
+    /// race on the shared transport - which only allows one request in
+    /// flight at a time. Without this, tapping "Read Once" more than once,
+    /// or tapping it while "Start Live" is already running, causes
+    /// overlapping reads that fail instantly (transport correctly refusing
+    /// the second one) instead of waiting their turn - which looks exactly
+    /// like every DID rapid-firing and failing instead of a clean 5-second
+    /// wait per request.
+    private var isPolling = false
+
     init() {
         self.slots = [
             GaugeSlot(defaultName: "PUT"),
@@ -126,6 +137,10 @@ final class GaugeSessionViewModel: ObservableObject {
     }
 
     private func pollAllSlots() async {
+        guard !isPolling else { return } // a previous cycle is still in flight - skip rather than race it
+        isPolling = true
+        defer { isPolling = false }
+
         for slot in slots where slot.enabled && slot.selectedEntry != nil {
             guard let entry = slot.selectedEntry else { continue }
 
