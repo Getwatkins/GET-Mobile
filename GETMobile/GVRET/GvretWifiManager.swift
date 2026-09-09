@@ -121,6 +121,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         }
         try? await Task.sleep(nanoseconds: 300_000_000) // let the firmware actually bring CAN0 up before we start using it
 
+        log("GVRET parser: A0RET binary RX format enabled (F1 00 + timestamp[4] + ID[4] + len/bus + data + checksum)")
         log("Setup complete - ready")
         state = .ready
     }
@@ -235,7 +236,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
             Task { @MainActor in
                 guard let self else { return }
                 if let data, !data.isEmpty {
-                    self.log("RX raw bytes: \(self.hexString([UInt8](data)))")
+                    self.log("RX raw bytes [\(data.count)]: \(self.hexString([UInt8](data)))")
                     for byte in data {
                         if let frame = self.parser.feed(byte) {
                             self.log("RX CAN id=0x\(String(frame.id, radix: 16, uppercase: true)) data=\(self.hexString(frame.data))" +

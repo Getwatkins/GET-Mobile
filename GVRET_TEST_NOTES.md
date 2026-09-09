@@ -28,3 +28,9 @@ The GVRET framing used here follows the public A0RET firmware and SavvyCAN imple
   resets its validation state on this command but does not send a two-byte
   `0xDE 0xAD` response. The old parser could therefore remain in a skip state
   and swallow the beginning of the next incoming CAN frame.
+
+
+## v6 corrections
+- Restored A0RET KEEPALIVE reply handling: F1 09 DE AD.
+- SETUP_CANBUS now sends exactly the 8-byte payload A0RET consumes; no extra trailing byte.
+- RX parser mirrors A0RET/SavvyCAN exactly and logs TCP chunk byte counts.

@@ -112,93 +112,85 @@ enum GvretProtocol {
         private var expectedBodyLength = 0
         private var skipRemaining = 0
 
-        /// Bytes remaining after the [0xF1][commandByte] header for each
-        /// non-frame reply type, taken directly from gvret_comm.cpp's
-        /// reply-building code for each case (PROTO_TIME_SYNC=1,
-        /// PROTO_GET_CANBUS_PARAMS=6, PROTO_GET_DEV_INFO=7,
-        /// PROTO_KEEPALIVE=9, PROTO_GET_NUMBUSES=12, PROTO_GET_EXT_BUSES=13).
+        // Exact A0RET reply lengths after F1 <command>, from gvret_comm.cpp.
+        // KEEPALIVE is F1 09 DE AD (2 bytes).
         private static let knownReplyBodyLengths: [UInt8: Int] = [
-            1: 4,   // TIME_SYNC: 4 bytes (32-bit timestamp)
-            6: 10,  // GET_CANBUS_PARAMS: flags (1), CAN0 speed (4), pad (1), CAN1 speed (4)
-            7: 6,   // GET_DEV_INFO: build num (2), 0x20, 3 more bytes
-            9: 0,   // KEEPALIVE/validation: no reply body; command only resets validation state
-            12: 1,  // GET_NUMBUSES: bus count
-            13: 15, // GET_EXT_BUSES: 15 zero bytes
+            1: 4,   // TIME_SYNC
+            6: 10,  // GET_CANBUS_PARAMS
+            7: 6,   // GET_DEV_INFO
+            9: 2,   // KEEPALIVE: DE AD
+            12: 1,  // GET_NUMBUSES
+            13: 15  // GET_EXT_BUSES
         ]
 
-        /// Feed one incoming byte. Returns a decoded CanFrame whenever a
-        /// complete "incoming canbus frame" (command byte 0) message finishes.
         func feed(_ byte: UInt8) -> CanFrame? {
             switch state {
             case .idle:
-                if byte == GvretProtocol.commandPrefix {
-                    state = .gotPrefix
-                }
-                // Any other byte (including a stray 0xE7 echo) is plain
-                // text-console output in this mode and is ignored - we
-                // never operate in LAWICEL/text mode from this client.
+                if byte == GvretProtocol.commandPrefix { state = .gotPrefix }
                 return nil
 
             case .gotPrefix:
                 commandByte = byte
                 if commandByte == 0 {
-                    // Incoming CAN frame: 4 timestamp + 4 id + 1 lenbus + data(len) + 1 checksum
-                    body = []
-                    expectedBodyLength = 4 + 4 + 1 // resolved further once we've read the length byte
+                    // A0RET receive format:
+                    // F1 00 | timestamp[4] | CAN ID[4] | len/bus | data[N] | checksum
+                    body.removeAll(keepingCapacity: true)
+                    expectedBodyLength = 10 // 4 + 4 + 1 + 0 + 1; updated at len/bus
                     state = .frameBody
-                } else if let knownLength = Self.knownReplyBodyLengths[commandByte] {
-                    if knownLength > 0 {
-                        skipRemaining = knownLength
-                        state = .skipBody
-                    } else {
-                        state = .idle
-                    }
+                } else if let length = Self.knownReplyBodyLengths[commandByte] {
+                    if length == 0 { state = .idle }
+                    else { skipRemaining = length; state = .skipBody }
                 } else {
-                    // Unrecognized reply type - we don't know its length,
-                    // so the safest option is to drop back to idle and
-                    // resync on the next 0xF1 rather than guess and risk
-                    // desyncing further. This client never sends a command
-                    // that triggers an unknown reply type during normal
-                    // operation, so this path shouldn't be hit in practice.
                     state = .idle
                 }
                 return nil
 
             case .skipBody:
                 skipRemaining -= 1
-                if skipRemaining <= 0 { state = .idle }
+                if skipRemaining == 0 { state = .idle }
                 return nil
 
             case .frameBody:
                 body.append(byte)
-                // Once we have the 9 header bytes (4 timestamp + 4 id + 1 lenbus),
-                // we know the total remaining length (data + 1 checksum byte).
+
+                // timestamp[0..3], id[4..7], len/bus[8]
                 if body.count == 9 {
                     let lenBus = body[8]
-                    let dataLen = Int(lenBus & 0xF)
-                    expectedBodyLength = 9 + dataLen + 1
+                    let dataLength = Int(lenBus & 0x0F)
+                    // Include the checksum byte exactly as A0RET emits it.
+                    expectedBodyLength = 9 + dataLength + 1
                 }
-                if body.count >= expectedBodyLength, expectedBodyLength > 9 {
+
+                if body.count == expectedBodyLength {
                     let frame = Self.decodeFrameBody(body)
                     state = .idle
                     return frame
                 }
-                if body.count > 64 { // safety valve against a corrupt/never-terminating stream
-                    state = .idle
-                }
+
+                if body.count > 18 { state = .idle }
                 return nil
             }
         }
 
         private static func decodeFrameBody(_ body: [UInt8]) -> CanFrame {
-            // body[0..3] = timestamp (unused here), body[4..7] = CAN ID (LE, bit31 = extended)
-            var id = UInt32(body[4]) | (UInt32(body[5]) << 8) | (UInt32(body[6]) << 16) | (UInt32(body[7]) << 24)
+            precondition(body.count >= 10)
+            let timestamp = UInt32(body[0]) |
+                            (UInt32(body[1]) << 8) |
+                            (UInt32(body[2]) << 16) |
+                            (UInt32(body[3]) << 24)
+            _ = timestamp
+
+            var id = UInt32(body[4]) |
+                      (UInt32(body[5]) << 8) |
+                      (UInt32(body[6]) << 16) |
+                      (UInt32(body[7]) << 24)
             let extended = (id & 0x80000000) != 0
             id &= 0x7FFFFFFF
+
             let lenBus = body[8]
-            let length = Int(lenBus & 0xF)
-            let bus = (lenBus >> 4) & 0x3
-            let data = Array(body[9..<(9 + length)])
+            let length = min(Int(lenBus & 0x0F), 8)
+            let bus = (lenBus >> 4) & 0x0F
+            let data = length > 0 ? Array(body[9..<(9 + length)]) : []
             return CanFrame(id: id, extended: extended, bus: bus, data: data)
         }
     }
