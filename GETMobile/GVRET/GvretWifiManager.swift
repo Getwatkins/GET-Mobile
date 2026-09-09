@@ -210,7 +210,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
 
         log("TX GVRET [\(label)]: \(hexString(bytes))")
 
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: Data(bytes), completion: .contentProcessed { error in
                 if let error {
                     continuation.resume(throwing: error)
