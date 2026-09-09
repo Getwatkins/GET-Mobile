@@ -67,7 +67,7 @@ enum GvretProtocol {
     }
 
     static func setupCanbusCommand(bus0Speed: UInt32, bus0Enabled: Bool) -> [UInt8] {
-        [commandPrefix, Command.setupCanbus.rawValue] + setupCanbusPayload(bus0Speed: bus0Speed, bus0Enabled: bus0Enabled) + [0x00]
+        [commandPrefix, Command.setupCanbus.rawValue] + setupCanbusPayload(bus0Speed: bus0Speed, bus0Enabled: bus0Enabled)
     }
 
     /// Mirrors BUILD_CAN_FRAME's exact byte layout (gvret_comm.cpp case
@@ -112,8 +112,10 @@ enum GvretProtocol {
         private var expectedBodyLength = 0
         private var skipRemaining = 0
 
-        // Exact A0RET reply lengths after F1 <command>, from gvret_comm.cpp.
-        // KEEPALIVE is F1 09 DE AD (2 bytes).
+        // Reply lengths after F1 <command>. These are the bytes emitted by
+        // A0RET for the commands used during initialization. CAN traffic can
+        // arrive interleaved with these replies, so the parser must be able to
+        // resynchronize when an arbitrary F1 00 occurs inside another frame.
         private static let knownReplyBodyLengths: [UInt8: Int] = [
             1: 4,   // TIME_SYNC
             6: 10,  // GET_CANBUS_PARAMS
@@ -132,10 +134,8 @@ enum GvretProtocol {
             case .gotPrefix:
                 commandByte = byte
                 if commandByte == 0 {
-                    // A0RET receive format:
-                    // F1 00 | timestamp[4] | CAN ID[4] | len/bus | data[N] | checksum
                     body.removeAll(keepingCapacity: true)
-                    expectedBodyLength = 10 // 4 + 4 + 1 + 0 + 1; updated at len/bus
+                    expectedBodyLength = 0
                     state = .frameBody
                 } else if let length = Self.knownReplyBodyLengths[commandByte] {
                     if length == 0 { state = .idle }
@@ -147,29 +147,69 @@ enum GvretProtocol {
 
             case .skipBody:
                 skipRemaining -= 1
-                if skipRemaining == 0 { state = .idle }
+                if skipRemaining <= 0 { state = .idle }
                 return nil
 
             case .frameBody:
                 body.append(byte)
 
-                // timestamp[0..3], id[4..7], len/bus[8]
+                // timestamp[0..3], CAN ID[4..7], len/bus[8]
                 if body.count == 9 {
                     let lenBus = body[8]
                     let dataLength = Int(lenBus & 0x0F)
-                    // Include the checksum byte exactly as A0RET emits it.
-                    expectedBodyLength = 9 + dataLength + 1
+
+                    // A valid classic CAN frame can only have 0...8 data bytes.
+                    // This check is essential for stream resynchronization:
+                    // arbitrary CAN payload/timestamp bytes may contain F1 00,
+                    // which otherwise looks like a new GVRET frame prefix.
+                    if dataLength > 8 {
+                        if resynchronizeToEmbeddedFramePrefix() {
+                            return finishIfComplete()
+                        }
+                        state = .idle
+                        return nil
+                    }
+
+                    expectedBodyLength = 9 + dataLength + 1 // + checksum
                 }
 
-                if body.count == expectedBodyLength {
+                if expectedBodyLength > 0 && body.count == expectedBodyLength {
                     let frame = Self.decodeFrameBody(body)
                     state = .idle
                     return frame
                 }
 
-                if body.count > 18 { state = .idle }
+                if body.count > 18 {
+                    state = .idle
+                }
                 return nil
             }
+        }
+
+        /// If an F1 00 appeared inside a false candidate, promote the embedded
+        /// F1 00 to the real frame prefix. This is needed because GVRET has no
+        /// escaping; CAN timestamps/IDs/data are arbitrary bytes.
+        private func resynchronizeToEmbeddedFramePrefix() -> Bool {
+            guard body.count >= 2 else { return false }
+            for i in 0..<(body.count - 1) where body[i] == 0xF1 && body[i + 1] == 0x00 {
+                body = Array(body[(i + 2)...])
+                expectedBodyLength = 0
+
+                if body.count >= 9 {
+                    let dataLength = Int(body[8] & 0x0F)
+                    guard dataLength <= 8 else { return false }
+                    expectedBodyLength = 9 + dataLength + 1
+                }
+                return true
+            }
+            return false
+        }
+
+        private func finishIfComplete() -> CanFrame? {
+            guard expectedBodyLength > 0, body.count == expectedBodyLength else { return nil }
+            let frame = Self.decodeFrameBody(body)
+            state = .idle
+            return frame
         }
 
         private static func decodeFrameBody(_ body: [UInt8]) -> CanFrame {
@@ -188,7 +228,7 @@ enum GvretProtocol {
             id &= 0x7FFFFFFF
 
             let lenBus = body[8]
-            let length = min(Int(lenBus & 0x0F), 8)
+            let length = Int(lenBus & 0x0F)
             let bus = (lenBus >> 4) & 0x0F
             let data = length > 0 ? Array(body[9..<(9 + length)]) : []
             return CanFrame(id: id, extended: extended, bus: bus, data: data)

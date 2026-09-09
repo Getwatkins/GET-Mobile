@@ -121,7 +121,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         }
         try? await Task.sleep(nanoseconds: 300_000_000) // let the firmware actually bring CAN0 up before we start using it
 
-        log("GVRET parser: A0RET binary RX format enabled (F1 00 + timestamp[4] + ID[4] + len/bus + data + checksum)")
+        log("GVRET parser: A0RET RX enabled (F1 00 + timestamp[4] + ID[4] + len/bus + data + checksum; invalid DLC resync enabled)")
         log("Setup complete - ready")
         state = .ready
     }

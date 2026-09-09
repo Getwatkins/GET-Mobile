@@ -34,3 +34,8 @@ The GVRET framing used here follows the public A0RET firmware and SavvyCAN imple
 - Restored A0RET KEEPALIVE reply handling: F1 09 DE AD.
 - SETUP_CANBUS now sends exactly the 8-byte payload A0RET consumes; no extra trailing byte.
 - RX parser mirrors A0RET/SavvyCAN exactly and logs TCP chunk byte counts.
+
+
+## v7 GVRET fixes
+- Corrected SETUP_CANBUS to exactly the 10 bytes A0RET consumes: `F1 05` plus the 8-byte configuration payload.
+- Fixed RX stream resynchronization for embedded `F1 00` sequences. A false candidate with an impossible classic-CAN DLC (>8) is rejected, and the parser promotes an embedded `F1 00` to the next frame prefix instead of clamping the DLC and decoding a bogus CAN ID.
