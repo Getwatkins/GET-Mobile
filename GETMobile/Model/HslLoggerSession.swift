@@ -20,6 +20,7 @@ final class HslLoggerSession: ObservableObject {
     @Published var lastError: String?
 
     private weak var transport: UdsTransport?
+    private weak var hslTransport: HslRawTransport?
     private var uds: UdsClient?
     private var task: Task<Void, Never>?
     private var pids = HslPidCatalog.enabledPhysical
@@ -38,7 +39,9 @@ final class HslLoggerSession: ObservableObject {
     }
 
     func attach(transport: UdsTransport) {
+        self.stop()
         self.transport = transport
+        self.hslTransport = transport as? HslRawTransport
         self.uds = UdsClient(transport: transport)
         self.uds?.requestTimeoutSeconds = 3
     }
@@ -46,11 +49,16 @@ final class HslLoggerSession: ObservableObject {
     func detach() {
         stop()
         uds = nil
+        hslTransport = nil
         transport = nil
     }
 
     func start() {
         guard !isRunning, let uds else { return }
+        guard hslTransport != nil || transport != nil else {
+            lastError = HslError.noTransport.localizedDescription
+            return
+        }
         guard !selectedPids.isEmpty else {
             lastError = HslError.noChannels.localizedDescription
             return
@@ -65,7 +73,7 @@ final class HslLoggerSession: ObservableObject {
                 // SimosTools can do this, but the patched ECU has a finite parameter-list
                 // buffer. Keeping the active list small also makes startup deterministic.
                 self.pids = self.selectedPids.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
-                try await self.configureHsl(uds: uds)
+                try await self.configureHsl()
                 await MainActor.run {
                     self.isConfigured = true
                     self.isRunning = true
@@ -74,7 +82,7 @@ final class HslLoggerSession: ObservableObject {
                     self.samples.removeAll(keepingCapacity: true)
                     self.latestValues.removeAll()
                 }
-                await self.pollLoop(uds: uds)
+                await self.pollLoop()
             } catch {
                 await MainActor.run {
                     self.lastError = error.localizedDescription
@@ -124,7 +132,7 @@ final class HslLoggerSession: ObservableObject {
         return url
     }
 
-    private func configureHsl(uds: UdsClient) async throws {
+    private func configureHsl() async throws {
         // This is the SimosTools/VW_Flash HSL setup sequence:
         // 3E 02 + memory offset B001E700 + 16-bit byte count +
         // [0][length nibble][32-bit address] entries + 00 terminator.
@@ -148,13 +156,13 @@ final class HslLoggerSession: ObservableObject {
                             UInt8((count >> 8) & 0xFF), UInt8(count & 0xFF)])
         request.append(parameterList)
 
-        let response = try await uds.sendRawRequest(request)
+        let response = try await sendHsl(request, expectedPayloadBytes: 0)
         guard response.first == 0x7E else {
             throw HslError.invalidSetupResponse(hex(response))
         }
     }
 
-    private func pollLoop(uds: UdsClient) async {
+    private func pollLoop() async {
         let interval = UInt64(max(0.02, 1.0 / max(1.0, sampleRate)) * 1_000_000_000)
         while !Task.isCancelled {
             let started = Date()
@@ -163,7 +171,8 @@ final class HslLoggerSession: ObservableObject {
                                     UInt8((0xB001E700 >> 24) & 0xFF), UInt8((0xB001E700 >> 16) & 0xFF),
                                     UInt8((0xB001E700 >> 8) & 0xFF), UInt8(0xB001E700 & 0xFF),
                                     0xFF, 0xFF])
-                let response = try await uds.sendRawRequest(request)
+                let expectedBytes = pids.reduce(0) { $0 + $1.length }
+                let response = try await sendHsl(request, expectedPayloadBytes: expectedBytes)
                 try Task.checkCancellation()
                 guard response.first == 0x7E else {
                     throw HslError.invalidPollResponse(hex(response))
@@ -204,6 +213,15 @@ final class HslLoggerSession: ObservableObject {
             }
         }
         isRunning = false
+    }
+
+    private func sendHsl(_ request: Data, expectedPayloadBytes: Int) async throws -> Data {
+        if let hslTransport {
+            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: 2.0)
+        }
+        guard let uds else { throw HslError.noTransport }
+        // Non-GVRET transports can use their normal ISO-TP implementation.
+        return try await uds.sendRawRequest(request)
     }
 
     private func decode(_ payload: Data) throws -> [String: Double] {
@@ -299,12 +317,14 @@ final class HslLoggerSession: ObservableObject {
         case invalidPollResponse(String)
         case shortPollResponse(expectedAtLeast: Int, got: Int)
         case noChannels
+        case noTransport
         var errorDescription: String? {
             switch self {
             case .invalidSetupResponse(let value): return "HSL setup failed. ECU response: \(value)"
             case .invalidPollResponse(let value): return "HSL read returned an unexpected response: \(value)"
             case .shortPollResponse(let expected, let got): return "HSL response was short: expected at least \(expected) bytes, received \(got)."
             case .noChannels: return "Select at least one HSL channel before starting the logger."
+            case .noTransport: return "HSL logging is not available on the current transport."
             }
         }
     }

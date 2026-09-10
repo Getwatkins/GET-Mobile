@@ -21,6 +21,15 @@ protocol UdsTransport: AnyObject {
     func disconnect()
 }
 
+/// Optional high-speed logging transport. HSL is not a normal ISO-TP response:
+/// the patched Simos application acknowledges the 0x3E04 request with 0x7E and
+/// then streams the configured payload as raw CAN frames. Implementations that
+/// can collect that stream can provide this specialized path.
+@MainActor
+protocol HslRawTransport: AnyObject {
+    func sendHslRequest(_ payload: Data, expectedPayloadBytes: Int, timeoutSeconds: Double) async throws -> Data
+}
+
 extension UdsTransport {
     func sendRequest(rxID: UInt16, txID: UInt16, payload: Data) async throws -> Data {
         try await sendRequest(rxID: rxID, txID: txID, payload: payload, timeoutSeconds: 2.0)

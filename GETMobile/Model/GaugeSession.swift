@@ -67,6 +67,7 @@ final class GaugeSessionViewModel: ObservableObject {
     @Published var lastError: String?
     @Published var isDemoMode = false
     @Published private(set) var isSelectingGauge = false
+    @Published private(set) var isHslActive = false
 
     private var uds: UdsClient?
     private var liveTask: Task<Void, Never>?
@@ -108,6 +109,7 @@ final class GaugeSessionViewModel: ObservableObject {
     }
 
     func startLive() {
+        guard !isHslActive else { return }
         guard liveTask == nil else { return }
         isLive = true
         liveTask = Task {
@@ -116,6 +118,19 @@ final class GaugeSessionViewModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: 250_000_000) // 4Hz; leaves the WiFi bridge more breathing room
             }
         }
+    }
+
+    /// Prevents any normal DID polling from restarting while the HSL logger owns
+    /// the ECU connection. This remains true even if the logger view is rebuilt
+    /// or dismissed unexpectedly after an HSL protocol error.
+    func beginHslLogging() {
+        stopLive()
+        isHslActive = true
+    }
+
+    func endHslLogging(resumeLive: Bool = true) {
+        isHslActive = false
+        if resumeLive && !isDemoMode { startLive() }
     }
 
     func beginGaugeSelection() {

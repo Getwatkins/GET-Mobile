@@ -39,7 +39,7 @@ struct DatalogView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
                         logger.stop()
-                        gaugeSession.startLive()
+                        gaugeSession.endHslLogging(resumeLive: true)
                         dismiss()
                     }
                 }
@@ -49,15 +49,16 @@ struct DatalogView: View {
             }
 
             .onAppear {
-                // Datalogging is a separate transport workload. Do not automatically
-                // start it when the screen appears; the user explicitly starts logging.
-                // This prevents the gauge poller from being mistaken for the logger and
-                // makes HSL startup failures visible on this screen.
-                gaugeSession.stopLive()
+                // HSL owns the ECU connection while this screen is alive. The lock
+                // prevents the normal gauge task from restarting if SwiftUI rebuilds
+                // or dismisses this cover because of an HSL error.
+                gaugeSession.beginHslLogging()
                 logger.attach(transport: transport)
             }
             .onDisappear {
                 logger.stop()
+                // Do not restart gauges here. Only the explicit Done button resumes
+                // the normal gauge workload.
             }
         }
     }

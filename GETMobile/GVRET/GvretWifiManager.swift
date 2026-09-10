@@ -6,7 +6,7 @@ import Network
 /// transports, this one has to do its own ISO-TP segmentation (see
 /// IsoTp.swift) since A0RET only relays raw CAN frames.
 @MainActor
-final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
+final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTransport {
     @Published private(set) var state: BridgeConnectionState = .disconnected
 
     /// Raw diagnostic trail - every command we send, and every CAN frame we
@@ -186,6 +186,50 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         let response = try await isoTp.receive(rxID: UInt32(rxID), txID: UInt32(txID), timeoutSeconds: timeoutSeconds)
         log("UDS response: RX=0x\(String(rxID, radix: 16, uppercase: true)) payload=\(hexString(response))")
         return Data(response)
+    }
+
+    /// HSL is a special Simos application patch: unlike normal UDS/ISO-TP,
+    /// the 0x3E04 request is acknowledged with a raw 0x7E byte and the HSL
+    /// payload follows as raw CAN frames. Do not feed this exchange through
+    /// IsoTpSession.receive(), because 0x7E is not an ISO-TP PCI byte.
+    func sendHslRequest(_ payload: Data, expectedPayloadBytes: Int, timeoutSeconds: Double = 2.0) async throws -> Data {
+        guard state == .ready else { throw GvretError.notReady }
+        pendingFrameRxID = UInt32(BridgeProtocol.simos18ResponseID)
+        pendingFrameTxID = UInt32(BridgeProtocol.simos18RequestID)
+        log("HSL request: TX=0x7E0 RX=0x7E8 payload=\(hexString([UInt8](payload))) expected=\(expectedPayloadBytes) bytes")
+
+        try await isoTp.send([UInt8](payload), txID: UInt32(BridgeProtocol.simos18RequestID), timeoutSeconds: timeoutSeconds)
+
+        guard let firstFrame = try await receiveCanFrame(matching: UInt32(BridgeProtocol.simos18ResponseID), timeoutSeconds: timeoutSeconds) else {
+            throw GvretError.timeout
+        }
+        guard firstFrame.first == 0x7E else {
+            throw GvretHslError.unexpectedAck(hexString(firstFrame))
+        }
+
+        var collected = Array(firstFrame.dropFirst())
+        log("HSL ACK: 7E; first-frame payload bytes=\(collected.count)")
+
+        while collected.count < expectedPayloadBytes {
+            guard let frame = try await receiveCanFrame(matching: UInt32(BridgeProtocol.simos18ResponseID), timeoutSeconds: timeoutSeconds) else {
+                throw GvretError.timeout
+            }
+            log("HSL raw data frame: \(hexString(frame))")
+            collected.append(contentsOf: frame)
+        }
+
+        let result = Array(collected.prefix(expectedPayloadBytes))
+        log("HSL payload complete: \(result.count) bytes")
+        return Data([0x7E] + result)
+    }
+
+    enum GvretHslError: Error, LocalizedError {
+        case unexpectedAck(String)
+        var errorDescription: String? {
+            switch self {
+            case .unexpectedAck(let value): return "HSL ECU did not return the expected 0x7E acknowledgement: \(value)"
+            }
+        }
     }
 
     func waitForResponse(timeoutSeconds: Double = 5.0) async throws -> Data {
