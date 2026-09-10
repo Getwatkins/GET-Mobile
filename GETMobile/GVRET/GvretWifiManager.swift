@@ -112,15 +112,11 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         }
         try? await Task.sleep(nanoseconds: 300_000_000)
 
-        log("Sending SETUP_CANBUS: bus0 = 500000 baud, enabled, transmit mode")
-        do {
-            try await rawWrite(GvretProtocol.setupCanbusCommand(bus0Speed: 500_000, bus0Enabled: true), label: "SETUP_CANBUS")
-        } catch {
-            failConnection("SETUP_CANBUS send failed: \(error.localizedDescription)")
-            return
-        }
-        try? await Task.sleep(nanoseconds: 300_000_000) // let the firmware actually bring CAN0 up before we start using it
-
+        // Do not reconfigure CAN0 here. The A0 already reports its active CAN0
+        // configuration in GET_CANBUS_PARAMS, and SavvyCAN's working connection
+        // sequence does not issue SETUP_CANBUS. Reinitializing CAN0 from the
+        // phone can interrupt the A0's existing receive stream.
+        log("A0RET CAN0 configuration left unchanged (using reported CAN0 settings)")
         log("GVRET parser: A0RET RX enabled (F1 00 + timestamp[4] + ID[4] + len/bus + data + checksum; invalid DLC resync enabled)")
         log("Setup complete - ready")
         state = .ready
@@ -138,8 +134,10 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         guard state == .ready else { throw GvretError.notReady }
         pendingFrameRxID = UInt32(rxID)
         pendingFrameTxID = UInt32(txID)
+        log("UDS request: TX=0x\(String(txID, radix: 16, uppercase: true)) RX=0x\(String(rxID, radix: 16, uppercase: true)) payload=\(hexString([UInt8](payload)))")
         try await isoTp.send([UInt8](payload), txID: UInt32(txID), timeoutSeconds: timeoutSeconds)
         let response = try await isoTp.receive(rxID: UInt32(rxID), txID: UInt32(txID), timeoutSeconds: timeoutSeconds)
+        log("UDS response: RX=0x\(String(rxID, radix: 16, uppercase: true)) payload=\(hexString(response))")
         return Data(response)
     }
 

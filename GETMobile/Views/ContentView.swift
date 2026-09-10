@@ -44,7 +44,10 @@ struct ContentView: View {
                     gvretWifi: gvretWifi,
                     onConnected: { kind, transport in
                         activeKind = kind
+                        session.isDemoMode = false
                         session.attach(transport: transport)
+                        // Begin real DID polling immediately after the transport is ready.
+                        session.startLive()
                     },
                     onPreviewDemo: {
                         session.isDemoMode = true

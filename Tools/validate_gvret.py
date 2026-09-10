@@ -14,11 +14,15 @@ assert actual == expected, f"GVRET TX mismatch: {actual.hex(' ')}"
 # flags (1) + CAN0 speed (4) + pad (1) + CAN1 speed (4).
 assert len(bytes.fromhex("01 20 A1 07 00 00 00 00 00 00")) == 10
 
-# SavvyCAN/A0RET SETUP_CANBUS command includes an additional trailing
-# terminator byte after the two 32-bit bus configuration words.
-setup = bytes([0xF1, 0x05]) + bytes.fromhex("20 A1 07 C0 00 00 00 00") + bytes([0x00])
-assert len(setup) == 11
-assert setup.hex(" ").upper() == "F1 05 20 A1 07 C0 00 00 00 00 00"
+# SETUP_CANBUS is intentionally not sent during normal connection.
+# The reference client reads the existing CAN configuration and uses it.
+
+# Known A0RET/SavvyCAN RX frame: timestamp + standard CAN ID 0x216 + 2 data bytes.
+rxtest = bytes.fromhex("F1 00 CF C9 AD 02 16 02 00 00 02 40 24 00")
+assert int.from_bytes(rxtest[6:10], "little") == 0x216
+assert rxtest[10] == 0x02
+assert rxtest[11:13] == bytes([0x40, 0x24])
 
 print("GVRET regression checks passed.")
 print("TX:", actual.hex(" ").upper())
+print("RX sample: ID=0x216 DLC=2 DATA=40 24")

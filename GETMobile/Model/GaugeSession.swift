@@ -157,7 +157,7 @@ final class GaugeSessionViewModel: ObservableObject {
                 lastError = nil
             } catch {
                 slot.applyError("--")
-                lastError = error.localizedDescription
+                lastError = "\(entry.name) (0x\(String(entry.did, radix: 16, uppercase: true))): \(error.localizedDescription)"
             }
         }
     }
