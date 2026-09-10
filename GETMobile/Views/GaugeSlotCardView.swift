@@ -1,40 +1,72 @@
 import SwiftUI
 
-/// One gauge slot: the dial/digital readout plus its DID quick-pick,
-/// mirroring one cell of the Windows app's 3-then-3 UniformGrid of DID slots.
+/// One gauge slot. The entire gauge card is tappable: tapping it opens the
+/// complete DID menu, so the user can change the displayed variable without
+/// hunting for a small picker underneath the gauge.
 struct GaugeSlotCardView: View {
     @ObservedObject var slot: GaugeSlot
     let isDigitalStyle: Bool
 
     var body: some View {
-        VStack(spacing: 6) {
+        Menu {
+            Button {
+                slot.selectedEntry = nil
+            } label: {
+                Label("— none —", systemImage: slot.selectedEntry == nil ? "checkmark" : "")
+            }
+
+            Divider()
+
+            ForEach(CommonDidCatalog.all) { entry in
+                Button {
+                    slot.selectedEntry = entry
+                    // Clear the old value immediately so the new gauge does not
+                    // briefly display the previous DID's value while waiting
+                    // for its first ECU response.
+                    slot.displayText = "--"
+                    slot.numericValue = .nan
+                } label: {
+                    if slot.selectedEntry?.did == entry.did {
+                        Label(entry.displayText, systemImage: "checkmark")
+                    } else {
+                        Text(entry.displayText)
+                    }
+                }
+            }
+        } label: {
+            gaugeContent
+        }
+        .menuStyle(.automatic)
+        .tint(GETTheme.gold)
+        .accessibilityLabel(slot.gaugeLabel.isEmpty ? "Choose gauge variable" : "Choose gauge variable, currently \(slot.gaugeLabel)")
+        .accessibilityHint("Tap to choose a different ECU variable")
+    }
+
+    private var gaugeContent: some View {
+        VStack(spacing: 4) {
             GaugeView(
                 value: slot.numericValue,
                 minimum: slot.gaugeMin,
                 maximum: slot.gaugeMax,
-                label: slot.gaugeLabel.isEmpty ? "—" : slot.gaugeLabel,
+                label: slot.gaugeLabel.isEmpty ? "Tap to select" : slot.gaugeLabel,
                 unit: slot.gaugeUnit,
                 warnMin: nil,
                 warnMax: nil,
                 isDigitalStyle: isDigitalStyle
             )
 
-            Picker("DID", selection: Binding(
-                get: { slot.selectedEntry },
-                set: { slot.selectedEntry = $0 }
-            )) {
-                Text("— none —").tag(CommonDidEntry?.none)
-                ForEach(CommonDidCatalog.all) { entry in
-                    Text(entry.displayText).tag(Optional(entry))
-                }
+            HStack(spacing: 5) {
+                Image(systemName: "hand.tap")
+                Text(slot.selectedEntry == nil ? "Tap to choose variable" : "Tap to change")
             }
-            .pickerStyle(.menu)
-            .tint(GETTheme.gold)
-            .font(.system(size: 12))
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundColor(GETTheme.amber.opacity(0.9))
+            .frame(maxWidth: .infinity)
         }
-        .padding(8)
+        .padding(6)
         .background(GETTheme.panelBackground)
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(GETTheme.border, lineWidth: 1))
-        .cornerRadius(6)
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(GETTheme.border, lineWidth: 1))
+        .cornerRadius(8)
+        .contentShape(RoundedRectangle(cornerRadius: 8))
     }
 }

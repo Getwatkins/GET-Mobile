@@ -13,7 +13,10 @@ struct GaugesView: View {
     @State private var showFlashView = false
     @State private var showGvretLog = false
 
-    private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+    private let columns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
 
     var body: some View {
         ScrollView {
@@ -56,7 +59,7 @@ struct GaugesView: View {
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(GETTheme.border, lineWidth: 1))
                 .cornerRadius(6)
 
-                LazyVGrid(columns: columns, spacing: 10) {
+                LazyVGrid(columns: columns, spacing: 12) {
                     ForEach(session.slots) { slot in
                         GaugeSlotCardView(slot: slot, isDigitalStyle: session.isDigitalStyle)
                     }
