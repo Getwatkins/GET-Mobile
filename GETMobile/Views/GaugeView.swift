@@ -60,11 +60,10 @@ struct GaugeView: View {
 
             ZStack {
                 if isDigitalStyle {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(GETTheme.panelBackground)
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(GETTheme.border, lineWidth: 2))
-                        .frame(width: size * 0.8, height: size * 0.45)
-                        .position(x: center.x, y: center.y * 0.75)
+                    // Digital mode intentionally has no inner gray display box.
+                    // The gauge card provides the visual boundary; the value is
+                    // rendered directly on the dark background for a cleaner look.
+                    EmptyView()
                 } else {
                     Circle()
                         .fill(GETTheme.panelBackground)

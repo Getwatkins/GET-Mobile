@@ -66,6 +66,7 @@ final class GaugeSessionViewModel: ObservableObject {
     @Published var isDigitalStyle = false
     @Published var lastError: String?
     @Published var isDemoMode = false
+    @Published private(set) var isSelectingGauge = false
 
     private var uds: UdsClient?
     private var liveTask: Task<Void, Never>?
@@ -117,6 +118,14 @@ final class GaugeSessionViewModel: ObservableObject {
         }
     }
 
+    func beginGaugeSelection() {
+        isSelectingGauge = true
+    }
+
+    func endGaugeSelection() {
+        isSelectingGauge = false
+    }
+
     func stopLive() {
         liveTask?.cancel()
         liveTask = nil
@@ -137,7 +146,8 @@ final class GaugeSessionViewModel: ObservableObject {
     }
 
     private func pollAllSlots() async {
-        guard !isPolling else { return } // a previous cycle is still in flight - skip rather than race it
+        guard !isPolling else { return }
+        guard !isSelectingGauge else { return } // a previous cycle is still in flight - skip rather than race it
         isPolling = true
         defer { isPolling = false }
 

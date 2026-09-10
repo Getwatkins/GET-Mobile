@@ -61,7 +61,7 @@ struct GaugesView: View {
 
                 LazyVGrid(columns: columns, spacing: 12) {
                     ForEach(session.slots) { slot in
-                        GaugeSlotCardView(slot: slot, isDigitalStyle: session.isDigitalStyle)
+                        GaugeSlotCardView(slot: slot, session: session, isDigitalStyle: session.isDigitalStyle)
                     }
                 }
                 .padding(.horizontal)
