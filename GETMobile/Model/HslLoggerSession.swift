@@ -159,7 +159,10 @@ final class HslLoggerSession: ObservableObject {
         while !Task.isCancelled {
             let started = Date()
             do {
-                let request = Data([0x3E, 0x04, 0xFF, 0xFF])
+                let request = Data([0x3E, 0x04,
+                                    UInt8((0xB001E700 >> 24) & 0xFF), UInt8((0xB001E700 >> 16) & 0xFF),
+                                    UInt8((0xB001E700 >> 8) & 0xFF), UInt8(0xB001E700 & 0xFF),
+                                    0xFF, 0xFF])
                 let response = try await uds.sendRawRequest(request)
                 try Task.checkCancellation()
                 guard response.first == 0x7E else {
@@ -180,9 +183,18 @@ final class HslLoggerSession: ObservableObject {
                 lastError = nil
             } catch is CancellationError {
                 break
+            } catch let error as HslError {
+                lastError = error.localizedDescription
+                // A protocol-level HSL rejection is not transient. Stop rather than
+                // hammering the ECU with the same malformed/unsupported request.
+                if case .invalidPollResponse = error {
+                    isRunning = false
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
             } catch {
                 lastError = error.localizedDescription
-                // A transient read error should not destroy a usable log. Back off briefly.
+                // A transient transport error should not destroy a usable log. Back off briefly.
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
             let elapsed = Date().timeIntervalSince(started)

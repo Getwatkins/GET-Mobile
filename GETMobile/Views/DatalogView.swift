@@ -58,7 +58,6 @@ struct DatalogView: View {
             }
             .onDisappear {
                 logger.stop()
-                gaugeSession.startLive()
             }
         }
     }
