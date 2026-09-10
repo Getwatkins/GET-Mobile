@@ -49,12 +49,16 @@ struct DatalogView: View {
             }
 
             .onAppear {
+                // Datalogging is a separate transport workload. Do not automatically
+                // start it when the screen appears; the user explicitly starts logging.
+                // This prevents the gauge poller from being mistaken for the logger and
+                // makes HSL startup failures visible on this screen.
                 gaugeSession.stopLive()
                 logger.attach(transport: transport)
-                if !logger.isRunning { logger.start() }
             }
             .onDisappear {
-                if !logger.isRunning { gaugeSession.startLive() }
+                logger.stop()
+                gaugeSession.startLive()
             }
         }
     }

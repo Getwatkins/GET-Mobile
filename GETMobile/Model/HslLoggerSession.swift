@@ -51,11 +51,20 @@ final class HslLoggerSession: ObservableObject {
 
     func start() {
         guard !isRunning, let uds else { return }
+        guard !selectedPids.isEmpty else {
+            lastError = HslError.noChannels.localizedDescription
+            return
+        }
         lastError = nil
         task?.cancel()
         task = Task { [weak self] in
             guard let self else { return }
             do {
+                // Only configure the channels the user selected. The S50 list contains
+                // 100 physical PIDs; sending all 100 creates a ~600-byte setup list.
+                // SimosTools can do this, but the patched ECU has a finite parameter-list
+                // buffer. Keeping the active list small also makes startup deterministic.
+                self.pids = self.selectedPids.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
                 try await self.configureHsl(uds: uds)
                 await MainActor.run {
                     self.isConfigured = true
@@ -156,7 +165,12 @@ final class HslLoggerSession: ObservableObject {
                 guard response.first == 0x7E else {
                     throw HslError.invalidPollResponse(hex(response))
                 }
+                // The SimosTools HSL backend returns 0x7E followed directly by
+                // the configured memory payload (it does not echo 0x04 here).
                 let payload = Data(response.dropFirst())
+                if payload.isEmpty {
+                    throw HslError.invalidPollResponse(hex(response))
+                }
                 let values = try decode(payload)
                 let now = Date()
                 samples.append(HslLogSample(timestamp: now, values: values))
@@ -272,11 +286,13 @@ final class HslLoggerSession: ObservableObject {
         case invalidSetupResponse(String)
         case invalidPollResponse(String)
         case shortPollResponse(expectedAtLeast: Int, got: Int)
+        case noChannels
         var errorDescription: String? {
             switch self {
             case .invalidSetupResponse(let value): return "HSL setup failed. ECU response: \(value)"
             case .invalidPollResponse(let value): return "HSL read returned an unexpected response: \(value)"
             case .shortPollResponse(let expected, let got): return "HSL response was short: expected at least \(expected) bytes, received \(got)."
+            case .noChannels: return "Select at least one HSL channel before starting the logger."
             }
         }
     }
