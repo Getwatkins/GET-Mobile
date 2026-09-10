@@ -65,9 +65,16 @@ enum UnlockSequence {
         logDetail?("Opening extended diagnostic session...")
         try await client.changeSession(.extendedDiagnostic)
 
-        let vin = await readVinOrEmpty(client: client, logDetail: logDetail)
+        let vin = try await readVinOrThrow(client: client, logDetail: logDetail)
         statusCallback?("SETUP", "Connected to vehicle with VIN: \(vin)", 100)
         logDetail?("Extended diagnostic session connected to vehicle with VIN: \(vin)")
+
+        // F190 is a multi-frame response on these ECUs. Successfully reading
+        // it is also a useful proof that the ISO-TP receive path is synchronized
+        // before we invoke the programming-precondition routine. Never proceed
+        // into flashing if that proof is missing.
+        let activeSession = try await client.readDataByIdentifier(0xF186)
+        logDetail?("Active diagnostic session DID 0xF186: \((activeSession.map { String(format: "%02X", $0) }).joined(separator: " "))")
 
         statusCallback?("SETUP", "Checking programming precondition", 100)
         logDetail?("Checking programming precondition, routine 0x0203...")
@@ -108,12 +115,14 @@ enum UnlockSequence {
     /// transports has its own timeout error type rather than one shared
     /// J2534-specific exception - the intent (never abort setup over a VIN
     /// read failure) is preserved regardless.
-    private static func readVinOrEmpty(client: UdsClient, logDetail: ((String) -> Void)?) async -> String {
+    private static func readVinOrThrow(client: UdsClient, logDetail: ((String) -> Void)?) async throws -> String {
         do {
-            return try await client.readDataByIdentifierAsAscii(vinDid)
+            let vin = try await client.readDataByIdentifierAsAscii(vinDid)
+            logDetail?("VIN read succeeded: \(vin)")
+            return vin
         } catch {
-            logDetail?("VIN read failed: \(error.localizedDescription)")
-            return ""
+            logDetail?("VIN read failed; refusing to continue to programming precondition: \(error.localizedDescription)")
+            throw error
         }
     }
 

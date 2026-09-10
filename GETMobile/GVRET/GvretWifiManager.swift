@@ -28,6 +28,15 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
     private var pendingFrameRxID: UInt32?
     private var pendingTimeoutTask: Task<Void, Never>?
 
+    // A TCP read can contain several complete CAN frames. In particular, a
+    // multi-frame ISO-TP response can deliver the First Frame and one or more
+    // Consecutive Frames in the same TCP callback. The old implementation
+    // dropped a matching frame whenever no continuation was installed yet,
+    // which made VIN and other multi-frame UDS reads time out. Keep a small
+    // per-ID queue so frames are never lost between ISO-TP receive steps.
+    private var receivedFrameQueues: [UInt32: [[UInt8]]] = [:]
+    private let maxQueuedFramesPerID = 32
+
     /// The txID of the request currently in flight - needed so that
     /// waitForResponse (used for NRC 0x78 "response pending" retries, where
     /// no new request goes out) can still correctly send Flow Control back
@@ -59,6 +68,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         self.host = host
         self.port = port
         parser.reset()
+        receivedFrameQueues.removeAll()
         state = .connecting
         let conn = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port) ?? 23, using: .tcp)
         connection = conn
@@ -94,6 +104,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         pendingFrameContinuation?.resume(returning: nil)
         pendingFrameContinuation = nil
         pendingTimeoutTask?.cancel()
+        receivedFrameQueues.removeAll()
     }
 
     private func setup() async {
@@ -225,6 +236,17 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         guard pendingFrameContinuation == nil else { throw GvretError.notReady }
 
         pendingFrameRxID = rxID
+
+        // Consume a frame that arrived before the caller installed its
+        // continuation (possible when several CAN frames were delivered in
+        // one TCP read).
+        if var queue = receivedFrameQueues[rxID], !queue.isEmpty {
+            let frame = queue.removeFirst()
+            receivedFrameQueues[rxID] = queue
+            log("Consumed queued CAN frame id=0x\(String(rxID, radix: 16, uppercase: true)) data=\(hexString(frame))")
+            return frame
+        }
+
         log("Waiting up to \(timeoutSeconds)s for a CAN frame with id=0x\(String(rxID, radix: 16, uppercase: true))")
         return await withCheckedContinuation { continuation in
             self.pendingFrameContinuation = continuation
@@ -302,9 +324,21 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
 
     private func handleIncomingFrame(_ frame: GvretProtocol.CanFrame) {
         guard let expectedID = pendingFrameRxID, frame.id == expectedID else { return }
-        guard let cont = pendingFrameContinuation else { return }
-        pendingFrameContinuation = nil
-        pendingTimeoutTask?.cancel()
-        cont.resume(returning: frame.data)
+
+        if let cont = pendingFrameContinuation {
+            pendingFrameContinuation = nil
+            pendingTimeoutTask?.cancel()
+            cont.resume(returning: frame.data)
+            return
+        }
+
+        var queue = receivedFrameQueues[frame.id, default: []]
+        if queue.count >= maxQueuedFramesPerID {
+            queue.removeFirst()
+            log("RX queue full for 0x\(String(frame.id, radix: 16, uppercase: true)); dropping oldest queued frame")
+        }
+        queue.append(frame.data)
+        receivedFrameQueues[frame.id] = queue
+        log("Queued CAN frame id=0x\(String(frame.id, radix: 16, uppercase: true)) for the next ISO-TP receive step")
     }
 }
