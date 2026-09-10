@@ -34,7 +34,7 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if isConnectedReady || demoModeActive {
+            if isConnectedReady || demoModeActive || activeKind != nil {
                 GaugesView(session: session, demoModeActive: $demoModeActive, transport: activeTransport, onDisconnect: disconnectActive)
             } else {
                 TransportPickerView(

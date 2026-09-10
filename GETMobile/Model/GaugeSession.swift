@@ -112,7 +112,7 @@ final class GaugeSessionViewModel: ObservableObject {
         liveTask = Task {
             while !Task.isCancelled {
                 await pollAllSlots()
-                try? await Task.sleep(nanoseconds: 150_000_000) // ~6-7Hz, gentle on the BLE link
+                try? await Task.sleep(nanoseconds: 250_000_000) // 4Hz; leaves the WiFi bridge more breathing room
             }
         }
     }

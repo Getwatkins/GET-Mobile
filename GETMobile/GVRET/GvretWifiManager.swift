@@ -15,6 +15,10 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
     @Published private(set) var debugLog: [String] = []
 
     private var connection: NWConnection?
+    private var host: String?
+    private var port: UInt16 = GvretProtocol.tcpPort
+    private var userInitiatedDisconnect = false
+    private var reconnectTask: Task<Void, Never>?
     private let parser = GvretProtocol.FrameParser()
 
     /// Frames matching whatever ID the caller is currently waiting for are
@@ -49,6 +53,12 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
     }
 
     func connect(host: String, port: UInt16 = GvretProtocol.tcpPort) {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        userInitiatedDisconnect = false
+        self.host = host
+        self.port = port
+        parser.reset()
         state = .connecting
         let conn = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port) ?? 23, using: .tcp)
         connection = conn
@@ -64,6 +74,8 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
                     self.state = .failed(error.localizedDescription)
                 case .cancelled:
                     self.state = .disconnected
+                    self.resumePendingReceive()
+                    self.scheduleReconnectIfNeeded()
                 default:
                     break
                 }
@@ -73,6 +85,9 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
     }
 
     func disconnect() {
+        userInitiatedDisconnect = true
+        reconnectTask?.cancel()
+        reconnectTask = nil
         connection?.cancel()
         connection = nil
         state = .disconnected
@@ -120,6 +135,27 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
         log("GVRET parser: A0RET RX enabled (F1 00 + timestamp[4] + ID[4] + len/bus + data + checksum; invalid DLC resync enabled)")
         log("Setup complete - ready")
         state = .ready
+    }
+
+    private func resumePendingReceive() {
+        pendingTimeoutTask?.cancel()
+        pendingTimeoutTask = nil
+        if let cont = pendingFrameContinuation {
+            pendingFrameContinuation = nil
+            cont.resume(returning: nil)
+        }
+    }
+
+    private func scheduleReconnectIfNeeded() {
+        guard !userInitiatedDisconnect, let host else { return }
+        guard reconnectTask == nil else { return }
+        log("GVRET disconnected - attempting automatic reconnect to \(host):\(port) in 1.0s")
+        reconnectTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard let self, !Task.isCancelled, !self.userInitiatedDisconnect else { return }
+            self.reconnectTask = nil
+            self.connect(host: host, port: self.port)
+        }
     }
 
     private func log(_ message: String) {
@@ -248,6 +284,13 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport {
                 } else if isComplete {
                     self.log("Connection closed by remote side")
                     self.state = .disconnected
+                    self.resumePendingReceive()
+                    self.scheduleReconnectIfNeeded()
+                } else if let error {
+                    self.log("GVRET receive error: \(error.localizedDescription)")
+                    self.state = .disconnected
+                    self.resumePendingReceive()
+                    self.scheduleReconnectIfNeeded()
                 }
             }
         }

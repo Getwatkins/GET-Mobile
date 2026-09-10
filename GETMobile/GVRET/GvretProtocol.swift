@@ -105,6 +105,14 @@ enum GvretProtocol {
     /// forward, since the next byte(s) of a longer-than-expected reply
     /// would otherwise be misread as the start of the next message.
     final class FrameParser {
+        func reset() {
+            state = .idle
+            commandByte = 0
+            body.removeAll(keepingCapacity: true)
+            expectedBodyLength = 0
+            skipRemaining = 0
+        }
+
         private enum State { case idle, gotPrefix, frameBody, skipBody }
         private var state: State = .idle
         private var commandByte: UInt8 = 0
