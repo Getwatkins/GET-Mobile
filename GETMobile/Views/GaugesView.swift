@@ -12,6 +12,8 @@ struct GaugesView: View {
     @StateObject private var flashSession = FlashSessionViewModel()
     @State private var showFlashView = false
     @State private var showGvretLog = false
+    @State private var showDatalog = false
+    @StateObject private var hslLogger = HslLoggerSession()
 
     private let columns = [
         GridItem(.flexible(), spacing: 12),
@@ -74,6 +76,23 @@ struct GaugesView: View {
                 }
 
                 if let transport, !session.isDemoMode {
+                    Button {
+                        session.stopLive()
+                        showDatalog = true
+                    } label: {
+                        Label("HSL Datalogger", systemImage: "waveform.path.ecg")
+                            .font(.system(size: 15, weight: .bold))
+                            .frame(maxWidth: .infinity)
+                            .padding(10)
+                            .background(GETTheme.amber)
+                            .foregroundColor(.black)
+                            .cornerRadius(6)
+                    }
+                    .padding(.horizontal)
+                    .fullScreenCover(isPresented: $showDatalog) {
+                        DatalogView(logger: hslLogger, gaugeSession: session, transport: transport)
+                    }
+
                     Button {
                         session.stopLive()
                         showFlashView = true
