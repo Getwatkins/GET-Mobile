@@ -45,6 +45,14 @@ struct GaugeSlotCardView: View {
                 isDigitalStyle: isDigitalStyle
             )
 
+            HStack(spacing: 18) {
+                minMaxText(title: "MIN", value: slot.observedMin)
+                Spacer(minLength: 4)
+                minMaxText(title: "MAX", value: slot.observedMax)
+            }
+            .font(GETTheme.monoFont(11, weight: .semibold))
+            .frame(maxWidth: .infinity)
+
             HStack(spacing: 5) {
                 Image(systemName: "hand.tap")
                 Text(slot.selectedEntry == nil ? "Tap to choose variable" : "Tap to change")
@@ -59,6 +67,24 @@ struct GaugeSlotCardView: View {
         .cornerRadius(8)
         .contentShape(RoundedRectangle(cornerRadius: 8))
     }
+    private func minMaxText(title: String, value: Double) -> some View {
+        HStack(spacing: 4) {
+            Text(title)
+                .foregroundColor(.secondary)
+            Text(value.isFinite ? format(value) : "--")
+                .foregroundColor(GETTheme.valueWhite)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
+    }
+
+    private func format(_ value: Double) -> String {
+        if value == value.rounded() && abs(value) < 1e6 {
+            return String(format: "%.0f", value)
+        }
+        return String(format: "%.2f", value)
+    }
+
 }
 
 private struct VariablePickerView: View {
@@ -75,6 +101,8 @@ private struct VariablePickerView: View {
                         slot.selectedEntry = nil
                         slot.displayText = "--"
                         slot.numericValue = .nan
+                        slot.observedMin = .nan
+                        slot.observedMax = .nan
                         onSelection()
                     } label: {
                         HStack {
@@ -92,6 +120,8 @@ private struct VariablePickerView: View {
                             slot.selectedEntry = entry
                             slot.displayText = "--"
                             slot.numericValue = .nan
+                            slot.observedMin = .nan
+                            slot.observedMax = .nan
                             onSelection()
                         } label: {
                             HStack {

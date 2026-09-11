@@ -194,6 +194,52 @@ final class IsoTpSession {
         }
     }
 
+    /// Sends a multi-frame payload using the ECU's first Flow Control as the
+    /// permission to stream the complete request. Some VW HSL implementations
+    /// report BS=2 (30 00 02) but do not emit additional Flow Control frames;
+    /// waiting for another FC after two consecutive frames therefore deadlocks
+    /// an otherwise valid HSL request. Keep this behavior isolated from normal
+    /// UDS ISO-TP, which continues to honor block size strictly.
+    func sendHsl(_ payload: [UInt8], txID: UInt32, timeoutSeconds: Double) async throws {
+        if let single = IsoTp.buildSingleFrame(payload) {
+            try await sendFrame(txID, single)
+            return
+        }
+
+        let (first, consecutive) = IsoTp.segmentMultiFrame(payload)
+        try await sendFrame(txID, first)
+
+        guard let fcData = try await receiveFrame(timeoutSeconds) else { throw IsoTpError.timeout }
+        guard case .flowControl(let status, _, let stMin) = IsoTp.parseFrame(fcData) else {
+            throw IsoTpError.unexpectedFrame
+        }
+        if status == IsoTp.FlowStatus.overflow { throw IsoTpError.flowControlOverflow }
+        if status == IsoTp.FlowStatus.wait {
+            // HSL ECUs seen in the field can send one or more WAIT frames before
+            // the final CTS. Continue waiting, but never start transmitting CFs
+            // until CTS is received.
+            var cts: (UInt8, UInt8)?
+            while cts == nil {
+                guard let next = try await receiveFrame(timeoutSeconds) else { throw IsoTpError.timeout }
+                guard case .flowControl(let nextStatus, _, let nextStMin) = IsoTp.parseFrame(next) else {
+                    throw IsoTpError.unexpectedFrame
+                }
+                if nextStatus == IsoTp.FlowStatus.overflow { throw IsoTpError.flowControlOverflow }
+                if nextStatus == IsoTp.FlowStatus.continueToSend { cts = (nextStatus, nextStMin) }
+            }
+        }
+
+        let delay = IsoTp.stMinToSeconds(stMin)
+        var firstAfterCts = true
+        for frame in consecutive {
+            if !firstAfterCts || delay > 0 {
+                if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            }
+            try await sendFrame(txID, frame)
+            firstAfterCts = false
+        }
+    }
+
     /// Receives one full UDS message on `rxID` (as filtered by the caller's
     /// receiveFrame closure), sending Flow Control after a First Frame as needed.
     func receive(rxID: UInt32, txID: UInt32, timeoutSeconds: Double) async throws -> [UInt8] {

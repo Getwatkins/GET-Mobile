@@ -213,7 +213,12 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         pendingFrameTxID = UInt32(BridgeProtocol.simos18RequestID)
         log("HSL ISO-TP request: TX=0x7E0 RX=0x7E8 payload=\(hexString([UInt8](payload))) expected=\(expectedPayloadBytes) bytes")
 
-        try await isoTp.send([UInt8](payload), txID: UInt32(BridgeProtocol.simos18RequestID), timeoutSeconds: timeoutSeconds)
+        // HSL is intentionally isolated from the normal UDS ISO-TP sender.
+        // The patched HSL backend can advertise BS=2 (30 00 02) but then expects
+        // the complete request to continue without another FC. Honoring that BS
+        // literally makes the logger stop after the first two CFs and report a
+        // timeout. Normal UDS traffic still uses the standards-compliant sender.
+        try await isoTp.sendHsl([UInt8](payload), txID: UInt32(BridgeProtocol.simos18RequestID), timeoutSeconds: timeoutSeconds)
         let response = try await isoTp.receive(
             rxID: UInt32(BridgeProtocol.simos18ResponseID),
             txID: UInt32(BridgeProtocol.simos18RequestID),

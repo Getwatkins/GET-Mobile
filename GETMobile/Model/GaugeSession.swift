@@ -10,6 +10,8 @@ final class GaugeSlot: ObservableObject, Identifiable {
     @Published var selectedEntry: CommonDidEntry?
     @Published var displayText: String = "--"
     @Published var numericValue: Double = .nan
+    @Published var observedMin: Double = .nan
+    @Published var observedMax: Double = .nan
     @Published var enabled: Bool = true
 
     var gaugeMin: Double { selectedEntry?.progMin ?? 0 }
@@ -31,11 +33,17 @@ final class GaugeSlot: ObservableObject, Identifiable {
         let (text, numeric) = DidValueDecoder.decode(entry, from: data)
         displayText = text
         numericValue = numeric
+        if numeric.isFinite {
+            observedMin = observedMin.isFinite ? Swift.min(observedMin, numeric) : numeric
+            observedMax = observedMax.isFinite ? Swift.max(observedMax, numeric) : numeric
+        }
     }
 
     func applyError(_ message: String) {
         displayText = message
         numericValue = .nan
+        observedMin = .nan
+        observedMax = .nan
     }
 
     /// Generates a smoothly moving fake value inside this DID's own real
@@ -49,6 +57,8 @@ final class GaugeSlot: ObservableObject, Identifiable {
         let value = mid + amplitude * sin(elapsed * 0.6 + phase)
         let rounded = (value * 100).rounded() / 100
         numericValue = rounded
+        observedMin = observedMin.isFinite ? Swift.min(observedMin, rounded) : rounded
+        observedMax = observedMax.isFinite ? Swift.max(observedMax, rounded) : rounded
         let unitSuffix = entry.unit.isEmpty ? "" : " \(entry.unit)"
         displayText = "\(entry.name): \(rounded)\(unitSuffix) (demo)"
     }

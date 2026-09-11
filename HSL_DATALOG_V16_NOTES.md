@@ -12,3 +12,11 @@ The SimosTools HSL backend is not a normal ISO-TP response. `sendRaw()` sends th
 
 ## Reference
 The public VW_Flash `simos_hsl.py` HSL backend sends `3E04 + B001E700 + FFFF`, expects a response beginning with `7E`, then parses the returned bytes after that first byte.
+
+
+## HSL transport fix
+The GVRET HSL sender now uses a dedicated ISO-TP transmit path. It accepts the
+ECU's initial Flow Control (including BS=2) and streams all Consecutive Frames
+for the HSL request instead of waiting for a second FC. Normal UDS ISO-TP still
+honors block size. This addresses the observed `30 00 02` followed by logger
+timeouts during the large 0x3E HSL setup/read request.
