@@ -109,6 +109,9 @@ final class GaugeSessionViewModel: ObservableObject {
     }
 
     func startLive() {
+        // HSL owns the ECU until the user explicitly taps Done in the logger.
+        // Never allow a SwiftUI lifecycle/update to restart normal DID polling
+        // while HSL is active.
         guard !isHslActive else { return }
         guard liveTask == nil else { return }
         isLive = true

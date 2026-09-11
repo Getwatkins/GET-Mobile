@@ -49,16 +49,16 @@ struct DatalogView: View {
             }
 
             .onAppear {
-                // HSL owns the ECU connection while this screen is alive. The lock
-                // prevents the normal gauge task from restarting if SwiftUI rebuilds
-                // or dismisses this cover because of an HSL error.
-                gaugeSession.beginHslLogging()
+                // HSL ownership was acquired by GaugesView BEFORE the full-screen
+                // cover was presented. Do not acquire/release it here: SwiftUI may
+                // rebuild this view while logging, and ownership must remain stable
+                // until the user explicitly taps Done.
                 logger.attach(transport: transport)
             }
             .onDisappear {
+                // Never resume gauges from onDisappear. The explicit Done button is
+                // the only place that releases the HSL ownership lock.
                 logger.stop()
-                // Do not restart gauges here. Only the explicit Done button resumes
-                // the normal gauge workload.
             }
         }
     }

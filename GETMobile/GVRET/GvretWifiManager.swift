@@ -188,39 +188,36 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         return Data(response)
     }
 
-    /// HSL is a special Simos application patch: unlike normal UDS/ISO-TP,
-    /// the 0x3E04 request is acknowledged with a raw 0x7E byte and the HSL
-    /// payload follows as raw CAN frames. Do not feed this exchange through
-    /// IsoTpSession.receive(), because 0x7E is not an ISO-TP PCI byte.
+    /// HSL uses the normal ISO-TP transport underneath the proprietary 0x3E
+    /// application service.  The important detail is that the CAN frame seen
+    /// on GVRET still contains the ISO-TP PCI byte. For example, the ECU
+    /// acknowledgement arrives as:
+    ///
+    ///     03 7E 00 31 AA AA AA AA
+    ///
+    /// The `03` is the ISO-TP single-frame length, not part of the HSL
+    /// response.  SimosTools' `sendRaw()/wait_frame()` path returns the
+    /// de-framed UDS payload, so GET Mobile must do the same by using the
+    /// existing IsoTpSession for both transmit and receive. This also allows
+    /// HSL samples larger than one CAN frame to be received correctly.
     func sendHslRequest(_ payload: Data, expectedPayloadBytes: Int, timeoutSeconds: Double = 2.0) async throws -> Data {
         guard state == .ready else { throw GvretError.notReady }
         pendingFrameRxID = UInt32(BridgeProtocol.simos18ResponseID)
         pendingFrameTxID = UInt32(BridgeProtocol.simos18RequestID)
-        log("HSL request: TX=0x7E0 RX=0x7E8 payload=\(hexString([UInt8](payload))) expected=\(expectedPayloadBytes) bytes")
+        log("HSL ISO-TP request: TX=0x7E0 RX=0x7E8 payload=\(hexString([UInt8](payload))) expected=\(expectedPayloadBytes) bytes")
 
         try await isoTp.send([UInt8](payload), txID: UInt32(BridgeProtocol.simos18RequestID), timeoutSeconds: timeoutSeconds)
+        let response = try await isoTp.receive(
+            rxID: UInt32(BridgeProtocol.simos18ResponseID),
+            txID: UInt32(BridgeProtocol.simos18RequestID),
+            timeoutSeconds: timeoutSeconds
+        )
 
-        guard let firstFrame = try await receiveCanFrame(matching: UInt32(BridgeProtocol.simos18ResponseID), timeoutSeconds: timeoutSeconds) else {
-            throw GvretError.timeout
+        log("HSL ISO-TP response: \(hexString(response))")
+        guard response.first == 0x7E else {
+            throw GvretHslError.unexpectedAck(hexString(response))
         }
-        guard firstFrame.first == 0x7E else {
-            throw GvretHslError.unexpectedAck(hexString(firstFrame))
-        }
-
-        var collected = Array(firstFrame.dropFirst())
-        log("HSL ACK: 7E; first-frame payload bytes=\(collected.count)")
-
-        while collected.count < expectedPayloadBytes {
-            guard let frame = try await receiveCanFrame(matching: UInt32(BridgeProtocol.simos18ResponseID), timeoutSeconds: timeoutSeconds) else {
-                throw GvretError.timeout
-            }
-            log("HSL raw data frame: \(hexString(frame))")
-            collected.append(contentsOf: frame)
-        }
-
-        let result = Array(collected.prefix(expectedPayloadBytes))
-        log("HSL payload complete: \(result.count) bytes")
-        return Data([0x7E] + result)
+        return Data(response)
     }
 
     enum GvretHslError: Error, LocalizedError {

@@ -77,7 +77,10 @@ struct GaugesView: View {
 
                 if let transport, !session.isDemoMode {
                     Button {
-                        session.stopLive()
+                        // Acquire the HSL ownership lock BEFORE presenting the logger.
+                        // This closes the small SwiftUI presentation window in which
+                        // another view update could restart normal gauge polling.
+                        session.beginHslLogging()
                         showDatalog = true
                     } label: {
                         Label("HSL Datalogger", systemImage: "waveform.path.ecg")
