@@ -73,11 +73,17 @@ final class HslLoggerSession: ObservableObject {
         task = Task { [weak self] in
             guard let self else { return }
             do {
-                // Only configure the channels the user selected. The S50 list contains
-                // 100 physical PIDs; sending all 100 creates a ~600-byte setup list.
-                // SimosTools can do this, but the patched ECU has a finite parameter-list
-                // buffer. Keeping the active list small also makes startup deterministic.
-                self.pids = self.selectedPids.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
+                // SimosTools does NOT configure only the channels currently shown in
+                // the UI. It builds one HSL parameter list from the complete physical
+                // parameter file, then each 3E04 read returns that complete packed
+                // memory image. The UI selection is only a presentation/filtering
+                // choice. Limiting the setup list to selected PIDs produced valid
+                // ISO-TP traffic (including the ECU flow-control response) but the
+                // patched HSL backend would not reliably complete the list/read cycle.
+                // Keep the exact catalog order here so the byte layout matches the
+                // SimosTools parameter-list contract.
+                self.pids = self.allPids.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
+                guard !self.pids.isEmpty else { throw HslError.noChannels }
                 try await self.configureHsl()
                 await MainActor.run {
                     self.isConfigured = true
@@ -225,7 +231,7 @@ final class HslLoggerSession: ObservableObject {
 
     private func sendHsl(_ request: Data, expectedPayloadBytes: Int) async throws -> Data {
         if let hslTransport {
-            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: 2.0)
+            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: 4.0)
         }
         guard let uds else { throw HslError.noTransport }
         // Non-GVRET transports can use their normal ISO-TP implementation.

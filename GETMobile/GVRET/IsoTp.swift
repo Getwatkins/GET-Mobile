@@ -183,6 +183,9 @@ final class IsoTpSession {
             let batchSize = blockSize == 0 ? remaining.count : Int(blockSize)
             let delay = IsoTp.stMinToSeconds(stMin)
 
+            // Block size 0 means the receiver grants the sender the entire
+            // remaining message. A non-zero block size requires another FC
+            // after that many consecutive frames. Keep the distinction exact.
             for _ in 0..<min(batchSize, remaining.count) {
                 if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
                 try await sendFrame(txID, remaining.first!)
