@@ -10,6 +10,7 @@ struct HslLogSample: Identifiable {
 @MainActor
 final class HslLoggerSession: ObservableObject {
     @Published private(set) var isRunning = false
+    @Published private(set) var isStarting = false
     @Published private(set) var isConfigured = false
     @Published private(set) var sampleCount = 0
     @Published private(set) var startDate: Date?
@@ -54,7 +55,10 @@ final class HslLoggerSession: ObservableObject {
     }
 
     func start() {
-        guard !isRunning, let uds else { return }
+        // Guard the whole startup transaction synchronously. SwiftUI can deliver
+        // two taps before the first async Task reaches configureHsl(), which
+        // otherwise starts two ISO-TP exchanges on the same GVRET connection.
+        guard !isRunning, !isStarting, let uds else { return }
         guard hslTransport != nil || transport != nil else {
             lastError = HslError.noTransport.localizedDescription
             return
@@ -63,6 +67,7 @@ final class HslLoggerSession: ObservableObject {
             lastError = HslError.noChannels.localizedDescription
             return
         }
+        isStarting = true
         lastError = nil
         task?.cancel()
         task = Task { [weak self] in
@@ -77,6 +82,7 @@ final class HslLoggerSession: ObservableObject {
                 await MainActor.run {
                     self.isConfigured = true
                     self.isRunning = true
+                    self.isStarting = false
                     self.startDate = Date()
                     self.sampleCount = 0
                     self.samples.removeAll(keepingCapacity: true)
@@ -88,6 +94,7 @@ final class HslLoggerSession: ObservableObject {
                     self.lastError = error.localizedDescription
                     self.isRunning = false
                     self.isConfigured = false
+                    self.isStarting = false
                 }
             }
         }
@@ -97,6 +104,7 @@ final class HslLoggerSession: ObservableObject {
         task?.cancel()
         task = nil
         isRunning = false
+        isStarting = false
     }
 
     func clear() {

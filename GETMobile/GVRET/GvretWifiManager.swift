@@ -45,6 +45,10 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     /// sequence would send FC on the wrong CAN ID and stall.
     private var pendingFrameTxID: UInt32?
 
+    /// HSL uses one long ISO-TP transaction at a time. A second Start tap must
+    /// never interleave its First/Consecutive Frames with the first transaction.
+    private var hslRequestInFlight = false
+
     private lazy var isoTp = IsoTpSession(
         sendFrame: { [weak self] id, data in try await self?.sendCanFrame(id: id, data: data) },
         receiveFrame: { [weak self] timeout in try await self?.receiveCanFrame(matching: self?.pendingFrameRxID ?? 0, timeoutSeconds: timeout) }
@@ -202,6 +206,9 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     /// HSL samples larger than one CAN frame to be received correctly.
     func sendHslRequest(_ payload: Data, expectedPayloadBytes: Int, timeoutSeconds: Double = 2.0) async throws -> Data {
         guard state == .ready else { throw GvretError.notReady }
+        guard !hslRequestInFlight else { throw GvretHslError.requestBusy }
+        hslRequestInFlight = true
+        defer { hslRequestInFlight = false }
         pendingFrameRxID = UInt32(BridgeProtocol.simos18ResponseID)
         pendingFrameTxID = UInt32(BridgeProtocol.simos18RequestID)
         log("HSL ISO-TP request: TX=0x7E0 RX=0x7E8 payload=\(hexString([UInt8](payload))) expected=\(expectedPayloadBytes) bytes")
@@ -235,9 +242,12 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     }
 
     enum GvretHslError: Error, LocalizedError {
+        case requestBusy
         case unexpectedAck(String)
         var errorDescription: String? {
             switch self {
+            case .requestBusy:
+                return "HSL request already in progress; waiting for the existing ISO-TP transaction to finish."
             case .unexpectedAck(let value): return "HSL ECU did not return the expected 0x7E acknowledgement: \(value)"
             }
         }

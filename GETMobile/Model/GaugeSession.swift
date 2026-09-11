@@ -127,8 +127,11 @@ final class GaugeSessionViewModel: ObservableObject {
     /// the ECU connection. This remains true even if the logger view is rebuilt
     /// or dismissed unexpectedly after an HSL protocol error.
     func beginHslLogging() {
-        stopLive()
+        // Claim the connection before cancelling Live so a new poll cycle cannot
+        // start in the small hand-off window. Any already-running cycle is also
+        // prevented from issuing its next DID request below.
         isHslActive = true
+        stopLive()
     }
 
     func endHslLogging(resumeLive: Bool = false) {
@@ -167,12 +170,14 @@ final class GaugeSessionViewModel: ObservableObject {
     }
 
     private func pollAllSlots() async {
+        guard !isHslActive else { return }
         guard !isPolling else { return }
         guard !isSelectingGauge else { return } // a previous cycle is still in flight - skip rather than race it
         isPolling = true
         defer { isPolling = false }
 
         for slot in slots where slot.enabled && slot.selectedEntry != nil {
+            guard !isHslActive else { break }
             guard let entry = slot.selectedEntry else { continue }
 
             if isDemoMode {

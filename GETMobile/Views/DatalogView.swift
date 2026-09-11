@@ -80,13 +80,14 @@ struct DatalogView: View {
                 Button {
                     if logger.isRunning { logger.stop() } else { logger.start() }
                 } label: {
-                    Label(logger.isRunning ? "Stop Logging" : "Start Logging", systemImage: logger.isRunning ? "stop.fill" : "record.circle")
+                    Label(logger.isStarting ? "Starting HSL..." : (logger.isRunning ? "Stop Logging" : "Start Logging"), systemImage: logger.isRunning ? "stop.fill" : "record.circle")
                         .frame(maxWidth: .infinity)
                         .padding(10)
                         .background(logger.isRunning ? GETTheme.warningRed : GETTheme.amber)
                         .foregroundColor(.black)
                         .cornerRadius(7)
-                }
+                    }
+                    .disabled(logger.isStarting)
 
                 Button {
                     showPidPicker = true
