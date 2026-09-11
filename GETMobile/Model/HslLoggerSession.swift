@@ -147,38 +147,67 @@ final class HslLoggerSession: ObservableObject {
     }
 
     private func configureHsl() async throws {
-        // This is the SimosTools/VW_Flash HSL setup sequence:
-        // 3E 02 + memory offset B001E700 + 16-bit byte count +
-        // [length nibble][32-bit address] entries + 00 terminator.
+        // Match SimosTools' MODE_3E initialization exactly.
         //
-        // IMPORTANT: SimosTools encodes each physical parameter in exactly
-        // five bytes: one byte whose high nibble is 0 and low nibble is the
-        // parameter length, followed by the 32-bit address. It is NOT a
-        // separate 0x00 byte followed by a length byte. The previous build
-        // inserted an extra byte here, making the byte count too large and
-        // corrupting the HSL setup list.
-        var parameterList = Data()
+        // The HSL address table is NOT sent as one giant 3E02 request. SimosTools
+        // splits the address table into chunks of at most 0x8F bytes and sends:
+        //   3E 32 <B001E700 + offset> <chunkLength> <address entries...>
+        // Each chunk is acknowledged with 7E 00 <chunkLength>. After the final
+        // chunk, 3E 33 B001E700 persists/enables the HSL stream and is acknowledged
+        // with 7E 00 FF.
+        //
+        // The previous implementation sent the entire table in one ISO-TP message.
+        // That produced the large 0x1FD request visible in the debug log, but that
+        // is not the SimosTools protocol and is why the ECU never reached the
+        // streaming state.
+        var addressArray = Data()
         for pid in pids {
             guard pid.length >= 1 && pid.length <= 4 else { continue }
-            parameterList.append(UInt8(pid.length & 0x0F))
-            parameterList.append(UInt8((pid.address >> 24) & 0xFF))
-            parameterList.append(UInt8((pid.address >> 16) & 0xFF))
-            parameterList.append(UInt8((pid.address >> 8) & 0xFF))
-            parameterList.append(UInt8(pid.address & 0xFF))
+            addressArray.append(UInt8(pid.length & 0xFF))
+            addressArray.append(UInt8((pid.address >> 24) & 0xFF))
+            addressArray.append(UInt8((pid.address >> 16) & 0xFF))
+            addressArray.append(UInt8((pid.address >> 8) & 0xFF))
+            addressArray.append(UInt8(pid.address & 0xFF))
         }
-        parameterList.append(0x00)
+        addressArray.append(0x00)
 
-        let offset: UInt32 = 0xB001E700
-        let count = UInt16(parameterList.count)
-        var request = Data([0x3E, 0x02,
-                            UInt8((offset >> 24) & 0xFF), UInt8((offset >> 16) & 0xFF),
-                            UInt8((offset >> 8) & 0xFF), UInt8(offset & 0xFF),
-                            UInt8((count >> 8) & 0xFF), UInt8(count & 0xFF)])
-        request.append(parameterList)
+        let chunkSize = 0x8F
+        var offset = 0
+        while offset < addressArray.count {
+            let end = min(offset + chunkSize, addressArray.count)
+            let chunk = Array(addressArray[offset..<end])
+            let memoryOffset = UInt32(0xB001E700) + UInt32(offset)
 
-        let response = try await sendHsl(request, expectedPayloadBytes: 0)
-        guard response.first == 0x7E else {
-            throw HslError.invalidSetupResponse(hex(response))
+            var request = Data([0x3E, 0x32,
+                                UInt8((memoryOffset >> 24) & 0xFF),
+                                UInt8((memoryOffset >> 16) & 0xFF),
+                                UInt8((memoryOffset >> 8) & 0xFF),
+                                UInt8(memoryOffset & 0xFF),
+                                UInt8((chunk.count >> 8) & 0xFF),
+                                UInt8(chunk.count & 0xFF)])
+            request.append(contentsOf: chunk)
+
+            let response = try await sendHsl(request, expectedPayloadBytes: 3)
+            let bytes = [UInt8](response)
+            guard bytes.count >= 3, bytes[0] == 0x7E, bytes[1] == 0x00,
+                  bytes[2] == UInt8(chunk.count & 0xFF) else {
+                throw HslError.invalidSetupResponse(hex(response))
+            }
+
+            // Keep this visible in the debug log so a failed initialization can
+            // immediately identify which SimosTools chunk was rejected.
+            lastError = nil
+            offset = end
+        }
+
+        // Final SimosTools persist/enable command. This is what changes the ECU
+        // from the address-list setup phase into the high-speed 3E data stream.
+        let persist = Data([0x3E, 0x33, 0xB0, 0x01, 0xE7, 0x00])
+        let finalResponse = try await sendHsl(persist, expectedPayloadBytes: 3)
+        let finalBytes = [UInt8](finalResponse)
+        guard finalBytes.count >= 3, finalBytes[0] == 0x7E,
+              finalBytes[1] == 0x00, finalBytes[2] == 0xFF else {
+            throw HslError.invalidSetupResponse(hex(finalResponse))
         }
     }
 
@@ -187,10 +216,10 @@ final class HslLoggerSession: ObservableObject {
         while !Task.isCancelled {
             let started = Date()
             do {
-                let request = Data([0x3E, 0x04,
-                                    UInt8((0xB001E700 >> 24) & 0xFF), UInt8((0xB001E700 >> 16) & 0xFF),
-                                    UInt8((0xB001E700 >> 8) & 0xFF), UInt8(0xB001E700 & 0xFF),
-                                    0xFF, 0xFF])
+                // SimosTools persists the 3E33 command and repeats it at the
+                // configured logging rate. GET Mobile uses the same behavior
+                // explicitly over GVRET: each request returns one packed HSL sample.
+                let request = Data([0x3E, 0x33, 0xB0, 0x01, 0xE7, 0x00])
                 let expectedBytes = pids.reduce(0) { $0 + $1.length }
                 let response = try await sendHsl(request, expectedPayloadBytes: expectedBytes)
                 try Task.checkCancellation()
@@ -257,17 +286,26 @@ final class HslLoggerSession: ObservableObject {
             let rawBytes = Array(bytes[offset..<(offset + pid.length)])
             offset += pid.length
             let raw: Double
+            // SimosTools' MODE_3E decoder consumes the packed HSL values in
+            // big-endian byte order (the 2-byte path explicitly builds d1<<8|d2,
+            // and the 4-byte path reconstructs the IEEE-754 bits the same way).
             if pid.length == 4 {
                 var bits: UInt32 = 0
-                for (i, b) in rawBytes.enumerated() { bits |= UInt32(b) << UInt32(i * 8) }
+                for b in rawBytes {
+                    bits = (bits << 8) | UInt32(b)
+                }
                 raw = Double(Float(bitPattern: bits))
             } else {
                 var value: UInt64 = 0
-                for (i, b) in rawBytes.enumerated() { value |= UInt64(b) << UInt64(i * 8) }
+                for b in rawBytes {
+                    value = (value << 8) | UInt64(b)
+                }
                 if pid.signed {
                     let bits = pid.length * 8
                     let sign = UInt64(1) << UInt64(bits - 1)
-                    let signedValue = (value & sign) != 0 ? Int64(value | (~UInt64(0) << UInt64(bits))) : Int64(value)
+                    let signedValue = (value & sign) != 0
+                        ? Int64(bitPattern: value | (~UInt64(0) << UInt64(bits)))
+                        : Int64(value)
                     raw = Double(signedValue)
                 } else {
                     raw = Double(value)
