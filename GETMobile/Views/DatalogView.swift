@@ -39,7 +39,7 @@ struct DatalogView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
                         logger.stop()
-                        gaugeSession.endHslLogging(resumeLive: true)
+                        gaugeSession.endHslLogging(resumeLive: false)
                         dismiss()
                     }
                 }

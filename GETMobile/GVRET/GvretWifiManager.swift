@@ -214,10 +214,24 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         )
 
         log("HSL ISO-TP response: \(hexString(response))")
-        guard response.first == 0x7E else {
+
+        // Some A0/GVRET paths hand the CAN payload to this specialized HSL
+        // method before the ISO-TP single-frame PCI byte has been removed.
+        // A valid HSL acknowledgement can therefore arrive as:
+        //   03 7E 00 31 AA AA AA AA
+        // where 03 is the ISO-TP single-frame length and 7E 00 31 is the
+        // actual UDS/HSL payload. Normalize that form here so HSL does not
+        // depend on which layer happened to consume the PCI byte.
+        var normalized = response
+        if response.count >= 2, response[0] == 0x03, response[1] == 0x7E {
+            normalized = Array(response.dropFirst())
+            log("HSL normalized ISO-TP single-frame PCI: \(hexString(normalized))")
+        }
+
+        guard normalized.first == 0x7E else {
             throw GvretHslError.unexpectedAck(hexString(response))
         }
-        return Data(response)
+        return Data(normalized)
     }
 
     enum GvretHslError: Error, LocalizedError {

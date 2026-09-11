@@ -131,7 +131,10 @@ final class GaugeSessionViewModel: ObservableObject {
         isHslActive = true
     }
 
-    func endHslLogging(resumeLive: Bool = true) {
+    func endHslLogging(resumeLive: Bool = false) {
+        // Keep live polling stopped after HSL. The user explicitly starts Live
+        // from the gauge screen, which prevents HSL/UDS polling from racing
+        // during the logger handoff.
         isHslActive = false
         if resumeLive && !isDemoMode { startLive() }
     }

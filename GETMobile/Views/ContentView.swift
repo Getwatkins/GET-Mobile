@@ -46,13 +46,15 @@ struct ContentView: View {
                         activeKind = kind
                         session.isDemoMode = false
                         session.attach(transport: transport)
-                        // Begin real DID polling immediately after the transport is ready.
-                        session.startLive()
+                        // Do not auto-start live polling. Keep the transport idle after
+                        // connection so HSL logging and flashing can exclusively own the
+                        // ECU session. The user can tap Start Live when desired.
+                        session.stopLive()
                     },
                     onPreviewDemo: {
                         session.isDemoMode = true
                         session.fillBlankSlotsForDemo()
-                        session.startLive()
+                        session.stopLive()
                         demoModeActive = true
                     }
                 )
