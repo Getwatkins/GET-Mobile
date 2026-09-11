@@ -149,12 +149,18 @@ final class HslLoggerSession: ObservableObject {
     private func configureHsl() async throws {
         // This is the SimosTools/VW_Flash HSL setup sequence:
         // 3E 02 + memory offset B001E700 + 16-bit byte count +
-        // [0][length nibble][32-bit address] entries + 00 terminator.
+        // [length nibble][32-bit address] entries + 00 terminator.
+        //
+        // IMPORTANT: SimosTools encodes each physical parameter in exactly
+        // five bytes: one byte whose high nibble is 0 and low nibble is the
+        // parameter length, followed by the 32-bit address. It is NOT a
+        // separate 0x00 byte followed by a length byte. The previous build
+        // inserted an extra byte here, making the byte count too large and
+        // corrupting the HSL setup list.
         var parameterList = Data()
         for pid in pids {
             guard pid.length >= 1 && pid.length <= 4 else { continue }
-            parameterList.append(0x00)
-            parameterList.append(UInt8(pid.length))
+            parameterList.append(UInt8(pid.length & 0x0F))
             parameterList.append(UInt8((pid.address >> 24) & 0xFF))
             parameterList.append(UInt8((pid.address >> 16) & 0xFF))
             parameterList.append(UInt8((pid.address >> 8) & 0xFF))
