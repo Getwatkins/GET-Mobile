@@ -147,68 +147,38 @@ final class HslLoggerSession: ObservableObject {
     }
 
     private func configureHsl() async throws {
-        // Match SimosTools' MODE_3E initialization exactly.
-        //
-        // The HSL address table is NOT sent as one giant 3E02 request. SimosTools
-        // splits the address table into chunks of at most 0x8F bytes and sends:
-        //   3E 32 <B001E700 + offset> <chunkLength> <address entries...>
-        // Each chunk is acknowledged with 7E 00 <chunkLength>. After the final
-        // chunk, 3E 33 B001E700 persists/enables the HSL stream and is acknowledged
-        // with 7E 00 FF.
-        //
-        // The previous implementation sent the entire table in one ISO-TP message.
-        // That produced the large 0x1FD request visible in the debug log, but that
-        // is not the SimosTools protocol and is why the ECU never reached the
-        // streaming state.
-        var addressArray = Data()
+        // Match the working Windows Simos18 logger exactly.  SimosHslLogger.cs
+        // builds one 3E02 request containing the complete physical parameter
+        // list at B001E700.  The ECU/J2534 ISO-TP layer handles segmentation
+        // and the ECU returns a 0x7E acknowledgement when the list is accepted.
+        var paramList = Data()
         for pid in pids {
-            guard pid.length >= 1 && pid.length <= 4 else { continue }
-            addressArray.append(UInt8(pid.length & 0xFF))
-            addressArray.append(UInt8((pid.address >> 24) & 0xFF))
-            addressArray.append(UInt8((pid.address >> 16) & 0xFF))
-            addressArray.append(UInt8((pid.address >> 8) & 0xFF))
-            addressArray.append(UInt8(pid.address & 0xFF))
+            guard pid.length >= 1 && pid.length <= 9 else { continue }
+            // Windows logger format: ASCII "0", ASCII decimal length digit,
+            // then the 32-bit address. For a 2-byte PID this is "02" + address.
+            paramList.append(0x30)
+            paramList.append(0x30 + UInt8(pid.length))
+            paramList.append(UInt8((pid.address >> 24) & 0xFF))
+            paramList.append(UInt8((pid.address >> 16) & 0xFF))
+            paramList.append(UInt8((pid.address >> 8) & 0xFF))
+            paramList.append(UInt8(pid.address & 0xFF))
         }
-        addressArray.append(0x00)
+        paramList.append(0x00)
 
-        let chunkSize = 0x8F
-        var offset = 0
-        while offset < addressArray.count {
-            let end = min(offset + chunkSize, addressArray.count)
-            let chunk = Array(addressArray[offset..<end])
-            let memoryOffset = UInt32(0xB001E700) + UInt32(offset)
+        let byteCount = paramList.count
+        var request = Data([0x3E, 0x02,
+                            0xB0, 0x01, 0xE7, 0x00,
+                            UInt8((byteCount >> 8) & 0xFF),
+                            UInt8(byteCount & 0xFF)])
+        request.append(paramList)
 
-            var request = Data([0x3E, 0x32,
-                                UInt8((memoryOffset >> 24) & 0xFF),
-                                UInt8((memoryOffset >> 16) & 0xFF),
-                                UInt8((memoryOffset >> 8) & 0xFF),
-                                UInt8(memoryOffset & 0xFF),
-                                UInt8((chunk.count >> 8) & 0xFF),
-                                UInt8(chunk.count & 0xFF)])
-            request.append(contentsOf: chunk)
-
-            let response = try await sendHsl(request, expectedPayloadBytes: 3)
-            let bytes = [UInt8](response)
-            guard bytes.count >= 3, bytes[0] == 0x7E, bytes[1] == 0x00,
-                  bytes[2] == UInt8(chunk.count & 0xFF) else {
-                throw HslError.invalidSetupResponse(hex(response))
-            }
-
-            // Keep this visible in the debug log so a failed initialization can
-            // immediately identify which SimosTools chunk was rejected.
-            lastError = nil
-            offset = end
+        logHsl("HSL setup (Windows-compatible 3E02): bytes=\(byteCount) params=\(pids.count)")
+        let response = try await sendHsl(request, expectedPayloadBytes: 1, timeoutSeconds: 6.0)
+        let bytes = [UInt8](response)
+        guard bytes.first == 0x7E else {
+            throw HslError.invalidSetupResponse(hex(response))
         }
-
-        // Final SimosTools persist/enable command. This is what changes the ECU
-        // from the address-list setup phase into the high-speed 3E data stream.
-        let persist = Data([0x3E, 0x33, 0xB0, 0x01, 0xE7, 0x00])
-        let finalResponse = try await sendHsl(persist, expectedPayloadBytes: 3)
-        let finalBytes = [UInt8](finalResponse)
-        guard finalBytes.count >= 3, finalBytes[0] == 0x7E,
-              finalBytes[1] == 0x00, finalBytes[2] == 0xFF else {
-            throw HslError.invalidSetupResponse(hex(finalResponse))
-        }
+        logHsl("HSL setup accepted: \(hex(response))")
     }
 
     private func pollLoop() async {
@@ -216,18 +186,17 @@ final class HslLoggerSession: ObservableObject {
         while !Task.isCancelled {
             let started = Date()
             do {
-                // SimosTools persists the 3E33 command and repeats it at the
-                // configured logging rate. GET Mobile uses the same behavior
-                // explicitly over GVRET: each request returns one packed HSL sample.
-                let request = Data([0x3E, 0x33, 0xB0, 0x01, 0xE7, 0x00])
+                // Match the working Windows Simos18 logger: after the 3E02
+                // list is installed, poll with 3E04 + B001E700 + FFFF.
+                let request = Data([0x3E, 0x04, 0xB0, 0x01, 0xE7, 0x00, 0xFF, 0xFF])
                 let expectedBytes = pids.reduce(0) { $0 + $1.length }
-                let response = try await sendHsl(request, expectedPayloadBytes: expectedBytes)
+                let response = try await sendHsl(request, expectedPayloadBytes: expectedBytes, timeoutSeconds: 3.0)
                 try Task.checkCancellation()
                 guard response.first == 0x7E else {
                     throw HslError.invalidPollResponse(hex(response))
                 }
-                // The SimosTools HSL backend returns 0x7E followed directly by
-                // the configured memory payload (it does not echo 0x04 here).
+                // Working Windows logger parses the packed HSL bytes immediately
+                // after the leading 0x7E acknowledgement byte.
                 let payload = Data(response.dropFirst())
                 if payload.isEmpty {
                     throw HslError.invalidPollResponse(hex(response))
@@ -264,9 +233,15 @@ final class HslLoggerSession: ObservableObject {
         isRunning = false
     }
 
-    private func sendHsl(_ request: Data, expectedPayloadBytes: Int) async throws -> Data {
+    private func logHsl(_ message: String) {
+        // Keep HSL diagnostics visible without requiring the view model to own
+        // another logger.  The error field is reserved for actual failures.
+        print("[GETMobile HSL] \(message)")
+    }
+
+    private func sendHsl(_ request: Data, expectedPayloadBytes: Int, timeoutSeconds: Double = 4.0) async throws -> Data {
         if let hslTransport {
-            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: 4.0)
+            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: timeoutSeconds)
         }
         guard let uds else { throw HslError.noTransport }
         // Non-GVRET transports can use their normal ISO-TP implementation.

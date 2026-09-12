@@ -193,7 +193,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     }
 
     /// HSL uses the normal ISO-TP transport underneath the proprietary 0x3E
-    /// application service.  The important detail is that the CAN frame seen
+    /// application service, matching the working Windows Simos18 logger.  The important detail is that the CAN frame seen
     /// on GVRET still contains the ISO-TP PCI byte. For example, the ECU
     /// acknowledgement arrives as:
     ///

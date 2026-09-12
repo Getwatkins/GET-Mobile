@@ -21,11 +21,10 @@ protocol UdsTransport: AnyObject {
     func disconnect()
 }
 
-/// Optional high-speed logging transport. Simos HSL repurposes the 0x3E
-/// heartbeat service: 0x3E32 chunks configure the memory-address list, 0x3E33
-/// enables/persists the stream, and subsequent 0x3E33 requests return packed
-/// HSL samples. Implementations that can collect that stream provide this
-/// specialized path.
+/// Optional high-speed Simos HSL logging transport. The working Simos18
+/// implementation uses a 3E02 request to install the complete memory-address
+/// list at B001E700, then polls it with 3E04 B001E700 FFFF. Implementations
+/// that can collect this stream provide this specialized path.
 @MainActor
 protocol HslRawTransport: AnyObject {
     func sendHslRequest(_ payload: Data, expectedPayloadBytes: Int, timeoutSeconds: Double) async throws -> Data
