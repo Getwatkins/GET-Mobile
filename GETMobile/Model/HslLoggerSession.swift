@@ -147,38 +147,39 @@ final class HslLoggerSession: ObservableObject {
     }
 
     private func configureHsl() async throws {
-        // Match the working Windows Simos18 logger exactly.  SimosHslLogger.cs
-        // builds one 3E02 request containing the complete physical parameter
-        // list at B001E700.  The ECU/J2534 ISO-TP layer handles segmentation
-        // and the ECU returns a 0x7E acknowledgement when the list is accepted.
-        var paramList = Data()
+        // This is the SimosTools/VW_Flash HSL setup sequence:
+        // 3E 02 + memory offset B001E700 + 16-bit byte count +
+        // [length nibble][32-bit address] entries + 00 terminator.
+        //
+        // IMPORTANT: SimosTools encodes each physical parameter in exactly
+        // five bytes: one byte whose high nibble is 0 and low nibble is the
+        // parameter length, followed by the 32-bit address. It is NOT a
+        // separate 0x00 byte followed by a length byte. The previous build
+        // inserted an extra byte here, making the byte count too large and
+        // corrupting the HSL setup list.
+        var parameterList = Data()
         for pid in pids {
-            guard pid.length >= 1 && pid.length <= 9 else { continue }
-            // Windows logger format: ASCII "0", ASCII decimal length digit,
-            // then the 32-bit address. For a 2-byte PID this is "02" + address.
-            paramList.append(0x30)
-            paramList.append(0x30 + UInt8(pid.length))
-            paramList.append(UInt8((pid.address >> 24) & 0xFF))
-            paramList.append(UInt8((pid.address >> 16) & 0xFF))
-            paramList.append(UInt8((pid.address >> 8) & 0xFF))
-            paramList.append(UInt8(pid.address & 0xFF))
+            guard pid.length >= 1 && pid.length <= 4 else { continue }
+            parameterList.append(UInt8(pid.length & 0x0F))
+            parameterList.append(UInt8((pid.address >> 24) & 0xFF))
+            parameterList.append(UInt8((pid.address >> 16) & 0xFF))
+            parameterList.append(UInt8((pid.address >> 8) & 0xFF))
+            parameterList.append(UInt8(pid.address & 0xFF))
         }
-        paramList.append(0x00)
+        parameterList.append(0x00)
 
-        let byteCount = paramList.count
+        let offset: UInt32 = 0xB001E700
+        let count = UInt16(parameterList.count)
         var request = Data([0x3E, 0x02,
-                            0xB0, 0x01, 0xE7, 0x00,
-                            UInt8((byteCount >> 8) & 0xFF),
-                            UInt8(byteCount & 0xFF)])
-        request.append(paramList)
+                            UInt8((offset >> 24) & 0xFF), UInt8((offset >> 16) & 0xFF),
+                            UInt8((offset >> 8) & 0xFF), UInt8(offset & 0xFF),
+                            UInt8((count >> 8) & 0xFF), UInt8(count & 0xFF)])
+        request.append(parameterList)
 
-        logHsl("HSL setup (Windows-compatible 3E02): bytes=\(byteCount) params=\(pids.count)")
-        let response = try await sendHsl(request, expectedPayloadBytes: 1, timeoutSeconds: 6.0)
-        let bytes = [UInt8](response)
-        guard bytes.first == 0x7E else {
+        let response = try await sendHsl(request, expectedPayloadBytes: 0)
+        guard response.first == 0x7E else {
             throw HslError.invalidSetupResponse(hex(response))
         }
-        logHsl("HSL setup accepted: \(hex(response))")
     }
 
     private func pollLoop() async {
@@ -186,17 +187,18 @@ final class HslLoggerSession: ObservableObject {
         while !Task.isCancelled {
             let started = Date()
             do {
-                // Match the working Windows Simos18 logger: after the 3E02
-                // list is installed, poll with 3E04 + B001E700 + FFFF.
-                let request = Data([0x3E, 0x04, 0xB0, 0x01, 0xE7, 0x00, 0xFF, 0xFF])
+                let request = Data([0x3E, 0x04,
+                                    UInt8((0xB001E700 >> 24) & 0xFF), UInt8((0xB001E700 >> 16) & 0xFF),
+                                    UInt8((0xB001E700 >> 8) & 0xFF), UInt8(0xB001E700 & 0xFF),
+                                    0xFF, 0xFF])
                 let expectedBytes = pids.reduce(0) { $0 + $1.length }
-                let response = try await sendHsl(request, expectedPayloadBytes: expectedBytes, timeoutSeconds: 3.0)
+                let response = try await sendHsl(request, expectedPayloadBytes: expectedBytes)
                 try Task.checkCancellation()
                 guard response.first == 0x7E else {
                     throw HslError.invalidPollResponse(hex(response))
                 }
-                // Working Windows logger parses the packed HSL bytes immediately
-                // after the leading 0x7E acknowledgement byte.
+                // The SimosTools HSL backend returns 0x7E followed directly by
+                // the configured memory payload (it does not echo 0x04 here).
                 let payload = Data(response.dropFirst())
                 if payload.isEmpty {
                     throw HslError.invalidPollResponse(hex(response))
@@ -233,15 +235,9 @@ final class HslLoggerSession: ObservableObject {
         isRunning = false
     }
 
-    private func logHsl(_ message: String) {
-        // Keep HSL diagnostics visible without requiring the view model to own
-        // another logger.  The error field is reserved for actual failures.
-        print("[GETMobile HSL] \(message)")
-    }
-
-    private func sendHsl(_ request: Data, expectedPayloadBytes: Int, timeoutSeconds: Double = 4.0) async throws -> Data {
+    private func sendHsl(_ request: Data, expectedPayloadBytes: Int) async throws -> Data {
         if let hslTransport {
-            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: timeoutSeconds)
+            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: 4.0)
         }
         guard let uds else { throw HslError.noTransport }
         // Non-GVRET transports can use their normal ISO-TP implementation.
@@ -261,26 +257,17 @@ final class HslLoggerSession: ObservableObject {
             let rawBytes = Array(bytes[offset..<(offset + pid.length)])
             offset += pid.length
             let raw: Double
-            // SimosTools' MODE_3E decoder consumes the packed HSL values in
-            // big-endian byte order (the 2-byte path explicitly builds d1<<8|d2,
-            // and the 4-byte path reconstructs the IEEE-754 bits the same way).
             if pid.length == 4 {
                 var bits: UInt32 = 0
-                for b in rawBytes {
-                    bits = (bits << 8) | UInt32(b)
-                }
+                for (i, b) in rawBytes.enumerated() { bits |= UInt32(b) << UInt32(i * 8) }
                 raw = Double(Float(bitPattern: bits))
             } else {
                 var value: UInt64 = 0
-                for b in rawBytes {
-                    value = (value << 8) | UInt64(b)
-                }
+                for (i, b) in rawBytes.enumerated() { value |= UInt64(b) << UInt64(i * 8) }
                 if pid.signed {
                     let bits = pid.length * 8
                     let sign = UInt64(1) << UInt64(bits - 1)
-                    let signedValue = (value & sign) != 0
-                        ? Int64(bitPattern: value | (~UInt64(0) << UInt64(bits)))
-                        : Int64(value)
+                    let signedValue = (value & sign) != 0 ? Int64(value | (~UInt64(0) << UInt64(bits))) : Int64(value)
                     raw = Double(signedValue)
                 } else {
                     raw = Double(value)

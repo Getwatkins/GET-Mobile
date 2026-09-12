@@ -193,7 +193,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     }
 
     /// HSL uses the normal ISO-TP transport underneath the proprietary 0x3E
-    /// application service, matching the working Windows Simos18 logger.  The important detail is that the CAN frame seen
+    /// application service.  The important detail is that the CAN frame seen
     /// on GVRET still contains the ISO-TP PCI byte. For example, the ECU
     /// acknowledgement arrives as:
     ///
@@ -204,21 +204,24 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     /// de-framed UDS payload, so GET Mobile must do the same by using the
     /// existing IsoTpSession for both transmit and receive. This also allows
     /// HSL samples larger than one CAN frame to be received correctly.
-    func sendHslRequest(_ payload: Data, expectedPayloadBytes: Int, timeoutSeconds: Double = 2.0) async throws -> Data {
+    func sendHslRequest(_ payload: Data, expectedPayloadBytes: Int, timeoutSeconds: Double = 6.0) async throws -> Data {
         guard state == .ready else { throw GvretError.notReady }
         guard !hslRequestInFlight else { throw GvretHslError.requestBusy }
         hslRequestInFlight = true
         defer { hslRequestInFlight = false }
         pendingFrameRxID = UInt32(BridgeProtocol.simos18ResponseID)
         pendingFrameTxID = UInt32(BridgeProtocol.simos18RequestID)
-        log("HSL ISO-TP request: TX=0x7E0 RX=0x7E8 payload=\(hexString([UInt8](payload))) expected=\(expectedPayloadBytes) bytes")
+        log("HSL ISO-TP START: TX=0x7E0 RX=0x7E8 payloadBytes=\(payload.count) expectedResponseBytes=\(expectedPayloadBytes)")
+        log("HSL ISO-TP payload: \(hexString([UInt8](payload)))")
 
         // HSL is intentionally isolated from the normal UDS ISO-TP sender.
         // The patched HSL backend can advertise BS=2 (30 00 02) but then expects
         // the complete request to continue without another FC. Honoring that BS
         // literally makes the logger stop after the first two CFs and report a
         // timeout. Normal UDS traffic still uses the standards-compliant sender.
+        log("HSL ISO-TP: transmitting request and waiting for ECU Flow Control...")
         try await isoTp.sendHsl([UInt8](payload), txID: UInt32(BridgeProtocol.simos18RequestID), timeoutSeconds: timeoutSeconds)
+        log("HSL ISO-TP: request transmission complete; waiting for ECU response...")
         let response = try await isoTp.receive(
             rxID: UInt32(BridgeProtocol.simos18ResponseID),
             txID: UInt32(BridgeProtocol.simos18RequestID),
@@ -226,6 +229,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         )
 
         log("HSL ISO-TP response: \(hexString(response))")
+        log("HSL ISO-TP COMPLETE")
 
         // Some A0/GVRET paths hand the CAN payload to this specialized HSL
         // method before the ISO-TP single-frame PCI byte has been removed.

@@ -206,98 +206,47 @@ final class IsoTpSession {
             return
         }
 
+        // The working Windows logger uses a normal ISO-TP connection. For the
+        // patched Simos18 HSL endpoint, the ECU sends one CTS frame (commonly
+        // 30 00 02) and then accepts the remainder of the request without
+        // requiring another FC. Do exactly that: wait for the first FC, honor
+        // STmin, then transmit every consecutive frame. Do not perform a
+        // speculative second-FC read because that can consume the HSL response.
         let (first, consecutive) = IsoTp.segmentMultiFrame(payload)
         try await sendFrame(txID, first)
 
-        // HSL firmware seen with the patched Simos application reports BS=2.
-        // Some revisions really do send another FC after two CFs; others report
-        // BS=2 but never send a second FC.  The old implementation chose one
-        // behavior globally, which caused one revision to stall and the other
-        // to overflow its receive path.  Use an adaptive strategy: honor BS=2
-        // initially, briefly listen for a follow-up FC, and if none arrives,
-        // continue the transfer.  This keeps the normal UDS ISO-TP path strict
-        // while making the HSL path tolerant of both observed ECU behaviors.
-        guard let firstFC = try await receiveFrame(timeoutSeconds) else {
+        guard let fcData = try await receiveFrame(timeoutSeconds) else {
             throw IsoTpError.timeout
         }
-        guard case .flowControl(let status, let blockSize, let stMin) = IsoTp.parseFrame(firstFC) else {
+        guard case .flowControl(let status, _, let stMin) = IsoTp.parseFrame(fcData) else {
             throw IsoTpError.unexpectedFrame
         }
         if status == IsoTp.FlowStatus.overflow { throw IsoTpError.flowControlOverflow }
 
         var effectiveSTMin = IsoTp.stMinToSeconds(stMin)
-        var remaining = consecutive[...]
-        var currentBlockSize = Int(blockSize)
-
         if status == IsoTp.FlowStatus.wait {
-            var cts: (Int, Double)?
-            while cts == nil {
+            while true {
                 guard let next = try await receiveFrame(timeoutSeconds) else { throw IsoTpError.timeout }
-                guard case .flowControl(let nextStatus, let nextBS, let nextSTMin) = IsoTp.parseFrame(next) else {
+                guard case .flowControl(let nextStatus, _, let nextSTMin) = IsoTp.parseFrame(next) else {
                     throw IsoTpError.unexpectedFrame
                 }
                 if nextStatus == IsoTp.FlowStatus.overflow { throw IsoTpError.flowControlOverflow }
                 if nextStatus == IsoTp.FlowStatus.continueToSend {
-                    cts = (Int(nextBS), IsoTp.stMinToSeconds(nextSTMin))
+                    effectiveSTMin = IsoTp.stMinToSeconds(nextSTMin)
+                    break
                 }
             }
-            currentBlockSize = cts!.0
-            effectiveSTMin = cts!.1
         }
 
-        while !remaining.isEmpty {
-            let batchSize = currentBlockSize == 0 ? remaining.count : min(currentBlockSize, remaining.count)
-            for _ in 0..<batchSize {
-                if effectiveSTMin > 0 {
-                    try await Task.sleep(nanoseconds: UInt64(effectiveSTMin * 1_000_000_000))
-                }
-                try await sendFrame(txID, remaining.first!)
-                remaining = remaining.dropFirst()
+        var seq: UInt8 = 1
+        for frame in consecutive {
+            if effectiveSTMin > 0 {
+                try await Task.sleep(nanoseconds: UInt64(effectiveSTMin * 1_000_000_000))
             }
-
-            if remaining.isEmpty { break }
-
-            if currentBlockSize == 0 {
-                continue
-            }
-
-            // Give firmware that advertises a non-zero BS a chance to send its
-            // next FC. We intentionally use a short probe rather than the full
-            // transaction timeout because some HSL builds omit the follow-up FC.
-            let probeTimeout = min(timeoutSeconds, 0.15)
-            if let next = try await receiveFrame(probeTimeout) {
-                guard case .flowControl(let nextStatus, let nextBS, let nextSTMin) = IsoTp.parseFrame(next) else {
-                    // A non-FC frame is most likely the HSL acknowledgement. Queue
-                    // it for the response phase instead of treating it as a fatal
-                    // transmit error.
-                    throw IsoTpError.unexpectedFrame
-                }
-                if nextStatus == IsoTp.FlowStatus.overflow { throw IsoTpError.flowControlOverflow }
-                if nextStatus == IsoTp.FlowStatus.wait {
-                    // Wait for the real CTS using the normal transaction timeout.
-                    var gotCTS = false
-                    while !gotCTS {
-                        guard let waitNext = try await receiveFrame(timeoutSeconds) else { throw IsoTpError.timeout }
-                        guard case .flowControl(let waitStatus, let waitBS, let waitSTMin) = IsoTp.parseFrame(waitNext) else {
-                            throw IsoTpError.unexpectedFrame
-                        }
-                        if waitStatus == IsoTp.FlowStatus.overflow { throw IsoTpError.flowControlOverflow }
-                        if waitStatus == IsoTp.FlowStatus.continueToSend {
-                            currentBlockSize = Int(waitBS)
-                            effectiveSTMin = IsoTp.stMinToSeconds(waitSTMin)
-                            gotCTS = true
-                        }
-                    }
-                } else {
-                    currentBlockSize = Int(nextBS)
-                    effectiveSTMin = IsoTp.stMinToSeconds(nextSTMin)
-                }
-            } else {
-                // No second FC: this is the behavior of the other known HSL
-                // firmware revision. Continue with the original advertised BS
-                // rather than deadlocking the logger.
-                currentBlockSize = 0
-            }
+            // segmentMultiFrame already assigned the correct sequence number;
+            // use the generated frame verbatim.
+            try await sendFrame(txID, frame)
+            seq = (seq == 15) ? 0 : seq + 1
         }
     }
 

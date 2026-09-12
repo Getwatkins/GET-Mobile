@@ -21,10 +21,10 @@ protocol UdsTransport: AnyObject {
     func disconnect()
 }
 
-/// Optional high-speed Simos HSL logging transport. The working Simos18
-/// implementation uses a 3E02 request to install the complete memory-address
-/// list at B001E700, then polls it with 3E04 B001E700 FFFF. Implementations
-/// that can collect this stream provide this specialized path.
+/// Optional high-speed logging transport. HSL is not a normal ISO-TP response:
+/// the patched Simos application acknowledges the 0x3E04 request with 0x7E and
+/// then streams the configured payload as raw CAN frames. Implementations that
+/// can collect that stream can provide this specialized path.
 @MainActor
 protocol HslRawTransport: AnyObject {
     func sendHslRequest(_ payload: Data, expectedPayloadBytes: Int, timeoutSeconds: Double) async throws -> Data
