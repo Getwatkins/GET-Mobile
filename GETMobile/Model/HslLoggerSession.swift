@@ -235,9 +235,18 @@ final class HslLoggerSession: ObservableObject {
         isRunning = false
     }
 
+    /// HSL transaction timeout. Must match (or exceed) GvretWifiManager's
+    /// `sendHslRequest` default. This used to be hardcoded to 4.0 here even
+    /// after the v27 fix raised the intended timeout to 6 seconds in
+    /// GvretWifiManager - that default was never actually reachable because
+    /// this was the only call site, and it always passed its own 4.0
+    /// explicitly. Net effect: every HSL setup/poll transaction was still
+    /// being cut off at 4s, not 6s, silently undoing the v27 fix.
+    private let hslTimeoutSeconds: Double = 6.0
+
     private func sendHsl(_ request: Data, expectedPayloadBytes: Int) async throws -> Data {
         if let hslTransport {
-            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: 4.0)
+            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: hslTimeoutSeconds)
         }
         guard let uds else { throw HslError.noTransport }
         // Non-GVRET transports can use their normal ISO-TP implementation.

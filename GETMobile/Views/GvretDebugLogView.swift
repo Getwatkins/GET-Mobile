@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Live diagnostic log for the GVRET WiFi transport - every command sent
 /// and every CAN frame observed (matching what we're waiting for or not),
@@ -22,6 +23,7 @@ struct GvretDebugLogView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
+                    .textSelection(.enabled)
                 }
                 .onChange(of: manager.debugLog.count) { _ in
                     if let last = manager.debugLog.indices.last {
@@ -38,6 +40,12 @@ struct GvretDebugLogView: View {
                         Task { await manager.sendRawCanDiagnosticTest() }
                     }
                     .disabled(manager.state != .ready)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Copy Log") {
+                        UIPasteboard.general.string = manager.debugLog.joined(separator: "\n")
+                    }
+                    .disabled(manager.debugLog.isEmpty)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
