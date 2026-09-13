@@ -17,6 +17,27 @@ import Foundation
 enum IsoTp {
     static let paddingByte: UInt8 = 0xAA
 
+    /// A hardware J2534 ISO-TP channel queues Consecutive Frames internally
+    /// and can honor a 1-2ms STmin exactly. This app instead round-trips
+    /// each frame through Swift -> TCP -> WiFi -> the A0/GVRET board's own
+    /// firmware before it ever reaches the physical bus, and the firmware
+    /// has to fully process one BUILD_CAN_FRAME command before it can
+    /// accept the next. If that per-command handling takes longer than the
+    /// gap we're leaving between frames, later frames in a burst can be
+    /// dropped or corrupted before they're ever transmitted - and this
+    /// would look identical regardless of how many frames are in the
+    /// burst, since it's the gap that's too small, not the total count.
+    /// This showed up as HSL setup silently never getting a response at
+    /// all, at both 7 frames and 72 frames, despite every byte on the wire
+    /// (per the debug log) being correct - the ECU's own requested STmin
+    /// (commonly 2ms) is safe for a hardware dongle but may simply be
+    /// faster than this WiFi bridge can sustain. A sender is always
+    /// allowed to wait *longer* than the requested STmin per ISO 15765-2,
+    /// so enforcing a floor here is spec-compliant, not a protocol
+    /// violation - it costs at most a few hundred ms on the largest HSL
+    /// requests, which is nothing against the 15s setup timeout.
+    static let minimumSendIntervalSeconds: Double = 0.02
+
     enum ParsedFrame: Equatable {
         case singleFrame(data: [UInt8])
         case firstFrame(totalLength: Int, data: [UInt8])
@@ -181,13 +202,13 @@ final class IsoTpSession {
             if status == IsoTp.FlowStatus.wait { continue } // ECU says wait - loop back and wait for the next FC
 
             let batchSize = blockSize == 0 ? remaining.count : Int(blockSize)
-            let delay = IsoTp.stMinToSeconds(stMin)
+            let delay = max(IsoTp.stMinToSeconds(stMin), IsoTp.minimumSendIntervalSeconds)
 
             // Block size 0 means the receiver grants the sender the entire
             // remaining message. A non-zero block size requires another FC
             // after that many consecutive frames. Keep the distinction exact.
             for _ in 0..<min(batchSize, remaining.count) {
-                if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 try await sendFrame(txID, remaining.first!)
                 remaining = remaining.dropFirst()
             }
@@ -218,18 +239,12 @@ final class IsoTpSession {
         guard let fcData = try await receiveFrame(timeoutSeconds) else {
             throw IsoTpError.timeout
         }
-        guard case .flowControl(let status, let blockSize, let stMin) = IsoTp.parseFrame(fcData) else {
+        guard case .flowControl(let status, _, let stMin) = IsoTp.parseFrame(fcData) else {
             throw IsoTpError.unexpectedFrame
         }
         if status == IsoTp.FlowStatus.overflow { throw IsoTpError.flowControlOverflow }
 
-        let ecuSTMin = IsoTp.stMinToSeconds(stMin)
-        // WiFi/TCP -> A0RET -> CAN has more buffering than the J2534 path used
-        // by the Windows logger. Give A0RET a small additional inter-frame
-        // margin so a valid ISO-TP burst is not queued faster than the bridge
-        // can put it on the CAN bus. This is deliberately only for HSL.
-        let hslBridgeMargin: Double = 0.008
-        var effectiveSTMin = max(ecuSTMin, hslBridgeMargin)
+        var effectiveSTMin = max(IsoTp.stMinToSeconds(stMin), IsoTp.minimumSendIntervalSeconds)
         if status == IsoTp.FlowStatus.wait {
             while true {
                 guard let next = try await receiveFrame(timeoutSeconds) else { throw IsoTpError.timeout }
@@ -238,23 +253,20 @@ final class IsoTpSession {
                 }
                 if nextStatus == IsoTp.FlowStatus.overflow { throw IsoTpError.flowControlOverflow }
                 if nextStatus == IsoTp.FlowStatus.continueToSend {
-                    effectiveSTMin = max(IsoTp.stMinToSeconds(nextSTMin), hslBridgeMargin)
+                    effectiveSTMin = max(IsoTp.stMinToSeconds(nextSTMin), IsoTp.minimumSendIntervalSeconds)
                     break
                 }
             }
         }
 
         var seq: UInt8 = 1
-        for (index, frame) in consecutive.enumerated() {
+        for frame in consecutive {
             if effectiveSTMin > 0 {
                 try await Task.sleep(nanoseconds: UInt64(effectiveSTMin * 1_000_000_000))
             }
             // segmentMultiFrame already assigned the correct sequence number;
             // use the generated frame verbatim.
             try await sendFrame(txID, frame)
-            // `seq` is retained for readability/diagnostics; the generated
-            // frame already contains its correct PCI sequence nibble.
-            _ = index
             seq = (seq == 15) ? 0 : seq + 1
         }
     }
