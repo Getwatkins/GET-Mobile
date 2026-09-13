@@ -176,7 +176,7 @@ final class HslLoggerSession: ObservableObject {
                             UInt8((count >> 8) & 0xFF), UInt8(count & 0xFF)])
         request.append(parameterList)
 
-        let response = try await sendHsl(request, expectedPayloadBytes: 0)
+        let response = try await sendHsl(request, expectedPayloadBytes: 0, timeoutSeconds: hslSetupTimeoutSeconds)
         guard response.first == 0x7E else {
             throw HslError.invalidSetupResponse(hex(response))
         }
@@ -192,7 +192,7 @@ final class HslLoggerSession: ObservableObject {
                                     UInt8((0xB001E700 >> 8) & 0xFF), UInt8(0xB001E700 & 0xFF),
                                     0xFF, 0xFF])
                 let expectedBytes = pids.reduce(0) { $0 + $1.length }
-                let response = try await sendHsl(request, expectedPayloadBytes: expectedBytes)
+                let response = try await sendHsl(request, expectedPayloadBytes: expectedBytes, timeoutSeconds: hslPollTimeoutSeconds)
                 try Task.checkCancellation()
                 guard response.first == 0x7E else {
                     throw HslError.invalidPollResponse(hex(response))
@@ -235,18 +235,25 @@ final class HslLoggerSession: ObservableObject {
         isRunning = false
     }
 
-    /// HSL transaction timeout. Must match (or exceed) GvretWifiManager's
-    /// `sendHslRequest` default. This used to be hardcoded to 4.0 here even
-    /// after the v27 fix raised the intended timeout to 6 seconds in
-    /// GvretWifiManager - that default was never actually reachable because
-    /// this was the only call site, and it always passed its own 4.0
-    /// explicitly. Net effect: every HSL setup/poll transaction was still
-    /// being cut off at 4s, not 6s, silently undoing the v27 fix.
-    private let hslTimeoutSeconds: Double = 6.0
+    /// The one-time 3E02 setup transaction has to build a list of every
+    /// physical parameter's memory read on the ECU (100 entries in the full
+    /// catalog) before it can ack - that appears to take noticeably longer
+    /// than any single 3E04 poll. The v28 debug log showed the Flow Control
+    /// arrive fine (BS=00 "send everything", STmin=02) and the full 72-frame
+    /// request transmit cleanly with no NRC, but then dead silence on 0x7E8
+    /// for the entire wait: the ECU never answered inside the old 6s window
+    /// at all, not even late. Give the setup phase noticeably more room
+    /// than a poll needs, since a slow-but-eventually-successful ack there
+    /// is a very different failure than a wedged connection.
+    private let hslSetupTimeoutSeconds: Double = 15.0
+    /// Each 3E04 poll only reads back the already-built list - much
+    /// smaller/faster than setup - so it keeps a short timeout so a single
+    /// dropped poll doesn't stall the whole logging loop for 15s.
+    private let hslPollTimeoutSeconds: Double = 4.0
 
-    private func sendHsl(_ request: Data, expectedPayloadBytes: Int) async throws -> Data {
+    private func sendHsl(_ request: Data, expectedPayloadBytes: Int, timeoutSeconds: Double) async throws -> Data {
         if let hslTransport {
-            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: hslTimeoutSeconds)
+            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: timeoutSeconds)
         }
         guard let uds else { throw HslError.noTransport }
         // Non-GVRET transports can use their normal ISO-TP implementation.
