@@ -73,31 +73,11 @@ final class HslLoggerSession: ObservableObject {
         task = Task { [weak self] in
             guard let self else { return }
             do {
-                // v27 switched this to the complete physical parameter file (matching
-                // SimosTools/VW_Flash's own behavior), reasoning that a shorter,
-                // selected-channels-only list had previously "produced valid ISO-TP
-                // traffic...but would not reliably complete the list/read cycle."
-                //
-                // A fresh trace on v28 shows the full 100-parameter/509-byte/72-frame
-                // request go out completely clean - correct First Frame length,
-                // correct Flow Control handling (ECU grants BS=00/STmin=02, i.e. "send
-                // it all, don't wait for another FC"), every Consecutive Frame sent -
-                // and then total silence from the ECU for the entire 15s window. Not a
-                // malformed response, not an NRC: nothing at all, as if the message
-                // never fully/correctly arrived. That's the signature of a large burst
-                // getting lost or corrupted somewhere in the WiFi -> A0 -> CAN bus (and
-                // likely a gateway module, on most VW/Audi platforms) hand-off, not a
-                // protocol-level mistake in this app - every byte on the wire matches
-                // what it should be.
-                //
-                // Sending only the currently-selected channels cuts this from 72
-                // Consecutive Frames to a handful, which directly tests that theory.
-                // This is a genuine experiment, not a confirmed permanent fix: if it
-                // still times out with total silence even at this much smaller size,
-                // that rules out burst size/reliability and points at something else
-                // (session state, security access, or the request just not reaching
-                // the ECU at all) - so revert to the full catalog rather than assume.
-                self.pids = self.selectedPids.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
+                // v30: the working Windows logger sends the complete physical
+                // HSL parameter catalog to the ECU. Keep the UI selection separate:
+                // selectedNames controls display/export, while pids controls the ECU
+                // server-side HSL list and positional poll decoding.
+                self.pids = self.allPids.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
                 guard !self.pids.isEmpty else { throw HslError.noChannels }
                 try await self.configureHsl()
                 await MainActor.run {

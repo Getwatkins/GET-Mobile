@@ -218,12 +218,18 @@ final class IsoTpSession {
         guard let fcData = try await receiveFrame(timeoutSeconds) else {
             throw IsoTpError.timeout
         }
-        guard case .flowControl(let status, _, let stMin) = IsoTp.parseFrame(fcData) else {
+        guard case .flowControl(let status, let blockSize, let stMin) = IsoTp.parseFrame(fcData) else {
             throw IsoTpError.unexpectedFrame
         }
         if status == IsoTp.FlowStatus.overflow { throw IsoTpError.flowControlOverflow }
 
-        var effectiveSTMin = IsoTp.stMinToSeconds(stMin)
+        let ecuSTMin = IsoTp.stMinToSeconds(stMin)
+        // WiFi/TCP -> A0RET -> CAN has more buffering than the J2534 path used
+        // by the Windows logger. Give A0RET a small additional inter-frame
+        // margin so a valid ISO-TP burst is not queued faster than the bridge
+        // can put it on the CAN bus. This is deliberately only for HSL.
+        let hslBridgeMargin: Double = 0.008
+        var effectiveSTMin = max(ecuSTMin, hslBridgeMargin)
         if status == IsoTp.FlowStatus.wait {
             while true {
                 guard let next = try await receiveFrame(timeoutSeconds) else { throw IsoTpError.timeout }
@@ -232,20 +238,23 @@ final class IsoTpSession {
                 }
                 if nextStatus == IsoTp.FlowStatus.overflow { throw IsoTpError.flowControlOverflow }
                 if nextStatus == IsoTp.FlowStatus.continueToSend {
-                    effectiveSTMin = IsoTp.stMinToSeconds(nextSTMin)
+                    effectiveSTMin = max(IsoTp.stMinToSeconds(nextSTMin), hslBridgeMargin)
                     break
                 }
             }
         }
 
         var seq: UInt8 = 1
-        for frame in consecutive {
+        for (index, frame) in consecutive.enumerated() {
             if effectiveSTMin > 0 {
                 try await Task.sleep(nanoseconds: UInt64(effectiveSTMin * 1_000_000_000))
             }
             // segmentMultiFrame already assigned the correct sequence number;
             // use the generated frame verbatim.
             try await sendFrame(txID, frame)
+            // `seq` is retained for readability/diagnostics; the generated
+            // frame already contains its correct PCI sequence nibble.
+            _ = index
             seq = (seq == 15) ? 0 : seq + 1
         }
     }
