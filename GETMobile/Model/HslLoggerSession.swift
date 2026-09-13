@@ -162,6 +162,28 @@ final class HslLoggerSession: ObservableObject {
     }
 
     private func configureHsl() async throws {
+        // Best-effort: request an extended diagnostic session before the HSL
+        // setup request. The reference Windows/J2534 logger's own HSL class
+        // never does this (matches VW_Flash's simos_hsl.py exactly) - but
+        // that class is only one piece of a larger Windows app, and nothing
+        // here can see whether something else in that app's own startup
+        // already leaves the ECU in an extended session by the time its HSL
+        // logger runs. Three separate debug traces (72-frame, 7-frame, and
+        // 7-frame-with-wider-frame-spacing) have now all shown the exact
+        // same shape: every byte of the 3E02 request goes out correct, the
+        // ECU's transport layer cleanly accepts it with a Flow Control, and
+        // then the request gets total silence - no NRC, nothing. That's
+        // consistent with a message that assembled just fine but was never
+        // answered at the *application* layer, which is exactly what you'd
+        // expect if 0x3E is gated behind a session state this app isn't
+        // currently in. This is deliberately non-fatal: if the ECU doesn't
+        // need it, this is a harmless extra request (visible in the GVRET
+        // debug log either way), and HSL setup proceeds regardless so we
+        // get a clean read on whether it actually mattered.
+        if let uds {
+            _ = try? await uds.changeSession(.extendedDiagnostic)
+        }
+
         // This is the SimosTools/VW_Flash HSL setup sequence:
         // 3E 02 + memory offset B001E700 + 16-bit byte count +
         // [length nibble][32-bit address] entries + 00 terminator.
