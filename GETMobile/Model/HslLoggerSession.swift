@@ -182,6 +182,34 @@ final class HslLoggerSession: ObservableObject {
         // get a clean read on whether it actually mattered.
         if let uds {
             _ = try? await uds.changeSession(.extendedDiagnostic)
+
+            // Security access, confirmed needed: with only the extended
+            // session request added (v31), a debug trace showed the 10 03
+            // request get a clean positive response (50 03 00 32 01 F4) -
+            // proving the ECU, session handling, and everything below the
+            // application layer are all fine - and the 3E02 HSL request
+            // STILL got total silence afterward. That rules out plain
+            // session-level gating and points at security access instead:
+            // this app's own flash path (UnlockSequence.swift) already
+            // authenticates with this exact SA2 seed/key exchange before
+            // it will touch the ECU's 0x3E manufacturer services, and HSL
+            // is a 0x3E service installed by the same community patch, so
+            // it's very likely gated the same way. Unlike flashing's full
+            // unlock sequence, this deliberately stops here: no
+            // programming-session switch, no workshop-log write - just the
+            // seed/key handshake, staying in extended session throughout,
+            // since that's all HSL should need and switching sessions or
+            // writing tool-usage records isn't appropriate just to view
+            // live data. Confirmed ECU family: Simos 18.1-18.6.
+            //
+            // Also non-fatal like the session request above: unlockSecurityAccess
+            // already no-ops safely if the ECU reports it's unlocked already
+            // (all-zero seed), so this is safe to attempt on every HSL start.
+            _ = try? await uds.unlockSecurityAccess(
+                requestSeedLevel: 0x11,
+                sendKeyLevel: 0x12,
+                sa2Script: Simos18ModuleInfo.sa2Script
+            )
         }
 
         // This is the SimosTools/VW_Flash HSL setup sequence:
