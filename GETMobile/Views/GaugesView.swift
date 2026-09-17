@@ -12,8 +12,11 @@ struct GaugesView: View {
     @StateObject private var flashSession = FlashSessionViewModel()
     @State private var showFlashView = false
     @State private var showGvretLog = false
+    @State private var showBridgeLog = false
     @State private var showDatalog = false
+    @State private var showDidLog = false
     @StateObject private var hslLogger = HslLoggerSession()
+    @StateObject private var didLogger = DidLoggerSession()
 
     private let columns = [
         GridItem(.flexible(), spacing: 12),
@@ -97,6 +100,28 @@ struct GaugesView: View {
                     }
 
                     Button {
+                        // Same ownership lock as HSL Datalogger, reused as-is: it's
+                        // really "exclusive polling ownership," not HSL-specific,
+                        // and this logger races on the exact same shared transport
+                        // normal Live gauge polling does.
+                        session.beginHslLogging()
+                        showDidLog = true
+                    } label: {
+                        Label("Standard Logger (CSV)", systemImage: "tablecells")
+                            .font(.system(size: 15, weight: .bold))
+                            .frame(maxWidth: .infinity)
+                            .padding(10)
+                            .background(GETTheme.panelBackground)
+                            .foregroundColor(GETTheme.amber)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(GETTheme.amber, lineWidth: 1))
+                            .cornerRadius(6)
+                    }
+                    .padding(.horizontal)
+                    .fullScreenCover(isPresented: $showDidLog) {
+                        DidLoggerView(logger: didLogger, gaugeSession: session, transport: transport)
+                    }
+
+                    Button {
                         session.stopLive()
                         showFlashView = true
                     } label: {
@@ -130,6 +155,25 @@ struct GaugesView: View {
                     .padding(.horizontal)
                     .sheet(isPresented: $showGvretLog) {
                         GvretDebugLogView(manager: gvret)
+                    }
+                }
+
+                if let bridge = transport as? BridgeManager {
+                    Button {
+                        showBridgeLog = true
+                    } label: {
+                        Label("Bridge Diagnostic Log", systemImage: "list.bullet.rectangle")
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(8)
+                            .background(GETTheme.panelBackground)
+                            .foregroundColor(GETTheme.amber)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(GETTheme.amber, lineWidth: 1))
+                            .cornerRadius(6)
+                    }
+                    .padding(.horizontal)
+                    .sheet(isPresented: $showBridgeLog) {
+                        BridgeDebugLogView(manager: bridge)
                     }
                 }
 

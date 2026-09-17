@@ -162,55 +162,19 @@ final class HslLoggerSession: ObservableObject {
     }
 
     private func configureHsl() async throws {
-        // Best-effort: request an extended diagnostic session before the HSL
-        // setup request. The reference Windows/J2534 logger's own HSL class
-        // never does this (matches VW_Flash's simos_hsl.py exactly) - but
-        // that class is only one piece of a larger Windows app, and nothing
-        // here can see whether something else in that app's own startup
-        // already leaves the ECU in an extended session by the time its HSL
-        // logger runs. Three separate debug traces (72-frame, 7-frame, and
-        // 7-frame-with-wider-frame-spacing) have now all shown the exact
-        // same shape: every byte of the 3E02 request goes out correct, the
-        // ECU's transport layer cleanly accepts it with a Flow Control, and
-        // then the request gets total silence - no NRC, nothing. That's
-        // consistent with a message that assembled just fine but was never
-        // answered at the *application* layer, which is exactly what you'd
-        // expect if 0x3E is gated behind a session state this app isn't
-        // currently in. This is deliberately non-fatal: if the ECU doesn't
-        // need it, this is a harmless extra request (visible in the GVRET
-        // debug log either way), and HSL setup proceeds regardless so we
-        // get a clean read on whether it actually mattered.
-        if let uds {
-            _ = try? await uds.changeSession(.extendedDiagnostic)
-
-            // Security access, confirmed needed: with only the extended
-            // session request added (v31), a debug trace showed the 10 03
-            // request get a clean positive response (50 03 00 32 01 F4) -
-            // proving the ECU, session handling, and everything below the
-            // application layer are all fine - and the 3E02 HSL request
-            // STILL got total silence afterward. That rules out plain
-            // session-level gating and points at security access instead:
-            // this app's own flash path (UnlockSequence.swift) already
-            // authenticates with this exact SA2 seed/key exchange before
-            // it will touch the ECU's 0x3E manufacturer services, and HSL
-            // is a 0x3E service installed by the same community patch, so
-            // it's very likely gated the same way. Unlike flashing's full
-            // unlock sequence, this deliberately stops here: no
-            // programming-session switch, no workshop-log write - just the
-            // seed/key handshake, staying in extended session throughout,
-            // since that's all HSL should need and switching sessions or
-            // writing tool-usage records isn't appropriate just to view
-            // live data. Confirmed ECU family: Simos 18.1-18.6.
-            //
-            // Also non-fatal like the session request above: unlockSecurityAccess
-            // already no-ops safely if the ECU reports it's unlocked already
-            // (all-zero seed), so this is safe to attempt on every HSL start.
-            _ = try? await uds.unlockSecurityAccess(
-                requestSeedLevel: 0x11,
-                sendKeyLevel: 0x12,
-                sa2Script: Simos18ModuleInfo.sa2Script
-            )
-        }
+        // v31/v32 tried adding an extended-session request and then a
+        // security-access (seed/key) attempt before this. Reverted: the
+        // reference SimosHslLogger.cs is explicit that VW_Flash's Python
+        // never does either of those, and the security-access attempt came
+        // back with subFunctionNotSupported in extended session - which
+        // would only be resolved by requesting it from *programming*
+        // session, and the user has confirmed that's genuinely unsafe here
+        // (risk of stalling the engine or bricking the ECU) - so that path
+        // is closed regardless of whether it would technically work. Going
+        // back to matching the reference exactly: no session change, no
+        // security access, just the raw 3E02 request, since the proven
+        // working tool doesn't need either and this app shouldn't do
+        // anything riskier than what's already known to work.
 
         // This is the SimosTools/VW_Flash HSL setup sequence:
         // 3E 02 + memory offset B001E700 + 16-bit byte count +

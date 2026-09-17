@@ -22,6 +22,18 @@ enum BridgeConnectionState: Equatable {
 final class BridgeManager: NSObject, ObservableObject, UdsTransport {
     @Published private(set) var state: BridgeConnectionState = .disconnected
     @Published private(set) var discoveredNames: [String] = []
+    /// Mirrors GvretWifiManager.debugLog so there's an equivalent trace
+    /// available for the BLE bridge path - added specifically so a Start
+    /// Logging attempt over "ESP32 Bridge" can be diagnosed the same way
+    /// the GVRET WiFi path has been throughout this investigation, rather
+    /// than flying blind on a brand new transport.
+    @Published private(set) var debugLog: [String] = []
+
+    private func log(_ message: String) {
+        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        debugLog.append("[\(timestamp)] \(message)")
+        if debugLog.count > 2000 { debugLog.removeFirst(debugLog.count - 2000) }
+    }
 
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
@@ -110,18 +122,29 @@ final class BridgeManager: NSObject, ObservableObject, UdsTransport {
     /// per DID read).
     func sendRequest(rxID: UInt16, txID: UInt16, payload: Data, timeoutSeconds: Double = 2.0) async throws -> Data {
         guard state == .ready, let char = dataReceiveChar, let p = peripheral else {
+            log("sendRequest: not ready (state=\(state))")
             throw BridgeError.notReady
         }
         guard pendingContinuation == nil else {
+            log("sendRequest: rejected, a request is already in flight")
             throw BridgeError.notReady // a request is already in flight
         }
 
+        log("TX request: TX=0x\(String(txID, radix: 16)) RX=0x\(String(rxID, radix: 16)) payload=\(payload.map { String(format: "%02X", $0) }.joined(separator: " "))")
         let frames = BridgeFrameEncoder.buildFrames(rxID: rxID, txID: txID, cmdFlags: 0, payload: payload, attMTU: attMTU)
+        log("TX: writing \(frames.count) BLE frame(s), attMTU=\(attMTU)")
         for frame in frames {
             p.writeValue(frame, for: char, type: .withoutResponse)
         }
 
-        return try await waitForResponse(timeoutSeconds: timeoutSeconds)
+        do {
+            let response = try await waitForResponse(timeoutSeconds: timeoutSeconds)
+            log("RX response: \(response.map { String(format: "%02X", $0) }.joined(separator: " "))")
+            return response
+        } catch {
+            log("RX: \(error.localizedDescription)")
+            throw error
+        }
     }
 
     /// Waits for the next reassembled response without writing anything -
@@ -178,14 +201,17 @@ extension BridgeManager: @preconcurrency CBCentralManagerDelegate {
     var discoveredPeripherals: [CBPeripheral] { seenPeripherals }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        log("BLE connected to \(peripheral.name ?? "bridge"), discovering services...")
         peripheral.discoverServices([BridgeProtocol.serviceUUID])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        log("BLE failed to connect: \(error?.localizedDescription ?? "unknown error")")
         state = .failed(error?.localizedDescription ?? "Failed to connect")
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        log("BLE disconnected\(error.map { ": \($0.localizedDescription)" } ?? "")")
         cleanupAfterDisconnect()
     }
 }
@@ -221,6 +247,7 @@ extension BridgeManager: @preconcurrency CBPeripheralDelegate {
         attMTU = peripheral.maximumWriteValueLength(for: .withoutResponse) + 3 // CoreBluetooth reports payload capacity; +3 to get back to "ATT MTU" terms matching the firmware's own accounting
         if dataReceiveChar != nil && dataNotifyChar != nil {
             state = .ready
+            log("Bridge ready, attMTU=\(attMTU)")
             sendDefaultPassword()
         }
     }
@@ -229,6 +256,7 @@ extension BridgeManager: @preconcurrency CBPeripheralDelegate {
         guard error == nil, let data = characteristic.value else { return }
         guard characteristic.uuid == BridgeProtocol.dataNotifyUUID else { return } // command-notify (password ack etc.) not wired to the read path
 
+        log("RX raw notify [\(data.count)]: \(data.map { String(format: "%02X", $0) }.joined(separator: " "))")
         if let (_, payload) = reassembler.feed(data) {
             pendingTimeoutTask?.cancel()
             if let cont = pendingContinuation {

@@ -56,11 +56,16 @@ enum Elm327Protocol {
             idx = next
         }
 
-        // Find the first 0x62 (positive ReadDataByIdentifier response) or
-        // 0x7F (negative response) and treat everything from there as the
-        // UDS payload - anything before it is CAN header/byte-count noise
-        // depending on the adapter's exact ATH/CAF formatting.
-        guard let startIdx = bytes.firstIndex(where: { $0 == 0x62 || $0 == 0x7F }) else { return nil }
+        // Find the first byte of a recognized UDS response and treat
+        // everything from there as the payload - anything before it is CAN
+        // header/byte-count noise depending on the adapter's exact
+        // ATH/CAF formatting. 0x62/0x7F cover the DID reads (0x22) this
+        // path was originally written for; 0x7E and 0x50 are added so
+        // TesterPresent/HSL-setup acks and DiagnosticSessionControl
+        // responses (0x7E.../0x50...) aren't silently dropped as
+        // unrecognized - those don't start with 0x62 and would otherwise
+        // never be found here.
+        guard let startIdx = bytes.firstIndex(where: { $0 == 0x62 || $0 == 0x7F || $0 == 0x7E || $0 == 0x50 }) else { return nil }
         return Data(bytes[startIdx...])
     }
 }
