@@ -10,6 +10,7 @@ struct DidLoggerView: View {
     @State private var shareURL: URL?
     @State private var exportError: String?
     @State private var selectedChartName = "Engine Speed"
+    @State private var scrubDate: Date?
 
     var body: some View {
         NavigationStack {
@@ -76,7 +77,7 @@ struct DidLoggerView: View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
                 Button {
-                    if logger.isRunning { logger.stop() } else { logger.start() }
+                    if logger.isRunning { logger.stop() } else { scrubDate = nil; logger.start() }
                 } label: {
                     Label(logger.isStarting ? "Starting..." : (logger.isRunning ? "Stop Logging" : "Start Logging"), systemImage: logger.isRunning ? "stop.fill" : "record.circle")
                         .frame(maxWidth: .infinity)
@@ -150,6 +151,7 @@ struct DidLoggerView: View {
                     logger.stop()
                     logger.clear()
                     shareURL = nil
+                    scrubDate = nil
                 }
                 .padding(.horizontal, 14)
             }
@@ -161,21 +163,43 @@ struct DidLoggerView: View {
     }
 
     private var currentValues: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-            ForEach(logger.selectedEntries) { entry in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name).font(.system(size: 11, weight: .semibold)).foregroundColor(.gray).lineLimit(1)
-                    HStack(alignment: .lastTextBaseline, spacing: 3) {
-                        Text(formatValue(logger.latestValues[entry.name]))
-                            .font(.system(size: 20, weight: .bold, design: .monospaced))
-                            .foregroundColor(.white)
-                        Text(entry.unit).font(.system(size: 10)).foregroundColor(GETTheme.amber)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                if let scrubbedSample {
+                    Label("At \(scrubbedSample.timestamp.formatted(date: .omitted, time: .standard))", systemImage: "hand.point.up.left.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(GETTheme.amber)
+                    Spacer()
+                    Button("Back to Live") { scrubDate = nil }
+                        .font(.system(size: 12, weight: .semibold))
+                } else {
+                    Label("Live", systemImage: "dot.radiowaves.left.and.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.gray)
+                    Spacer()
+                    if !logger.samples.isEmpty {
+                        Text("Tap or drag the graph below to inspect a point")
+                            .font(.system(size: 11))
+                            .foregroundColor(.gray)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(GETTheme.background)
-                .cornerRadius(6)
+            }
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(logger.selectedEntries) { entry in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.name).font(.system(size: 11, weight: .semibold)).foregroundColor(.gray).lineLimit(1)
+                        HStack(alignment: .lastTextBaseline, spacing: 3) {
+                            Text(formatValue((scrubbedSample?.values ?? logger.latestValues)[entry.name]))
+                                .font(.system(size: 20, weight: .bold, design: .monospaced))
+                                .foregroundColor(.white)
+                            Text(entry.unit).font(.system(size: 10)).foregroundColor(GETTheme.amber)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(GETTheme.background)
+                    .cornerRadius(6)
+                }
             }
         }
     }
@@ -183,7 +207,7 @@ struct DidLoggerView: View {
     private var chart: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Live graph").font(.system(size: 15, weight: .bold)).foregroundColor(GETTheme.gold)
+                Text("Graph").font(.system(size: 15, weight: .bold)).foregroundColor(GETTheme.gold)
                 Spacer()
                 Picker("Channel", selection: $selectedChartName) {
                     ForEach(logger.selectedEntries) { entry in Text(entry.name).tag(entry.name) }
@@ -199,8 +223,42 @@ struct DidLoggerView: View {
                         )
                     }
                 }
+                if let scrubbedSample {
+                    RuleMark(x: .value("Selected", scrubbedSample.timestamp))
+                        .foregroundStyle(GETTheme.amber.opacity(0.6))
+                    if let value = scrubbedSample.values[selectedChartName] {
+                        PointMark(
+                            x: .value("Time", scrubbedSample.timestamp),
+                            y: .value(selectedChartName, value)
+                        )
+                        .foregroundStyle(GETTheme.amber)
+                    }
+                }
             }
             .frame(height: 210)
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(.clear)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    guard !logger.samples.isEmpty else { return }
+                                    let originX = geo[proxy.plotAreaFrame].origin.x
+                                    let x = value.location.x - originX
+                                    if let date: Date = proxy.value(atX: x) {
+                                        scrubDate = date
+                                    }
+                                }
+                        )
+                }
+            }
+            if !logger.samples.isEmpty {
+                Text("Tap or drag to inspect a point - values above update to match.")
+                    .font(.system(size: 10))
+                    .foregroundColor(.gray)
+            }
         }
         .padding()
         .background(GETTheme.panelBackground)
@@ -216,6 +274,16 @@ struct DidLoggerView: View {
                 .font(.system(size: 11)).foregroundColor(.gray)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Nearest recorded sample to the scrubbed timestamp - nil while there's
+    /// no active scrub selection, which is how currentValues knows to fall
+    /// back to the live latest values instead.
+    private var scrubbedSample: DidLogSample? {
+        guard let scrubDate else { return nil }
+        return logger.samples.min { lhs, rhs in
+            abs(lhs.timestamp.timeIntervalSince(scrubDate)) < abs(rhs.timestamp.timeIntervalSince(scrubDate))
+        }
     }
 
     private func formatValue(_ value: Double?) -> String {
@@ -245,6 +313,17 @@ struct DidChannelPicker: View {
                 Section {
                     Text("Select channels to record. Each one is read with its own normal request, same as a gauge - more channels means a slower cycle, not a bigger single request.")
                         .font(.system(size: 12)).foregroundColor(.gray)
+                    HStack(spacing: 10) {
+                        Button("Select All \(CommonDidCatalog.all.count)") {
+                            logger.selectedNames = Set(CommonDidCatalog.all.map(\.name))
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        Spacer()
+                        Button("Deselect All", role: .destructive) {
+                            logger.selectedNames.removeAll()
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                    }
                 }
                 ForEach(filtered) { entry in
                     Button {
