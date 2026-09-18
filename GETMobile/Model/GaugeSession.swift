@@ -96,12 +96,12 @@ final class GaugeSessionViewModel: ObservableObject {
 
     init() {
         self.slots = [
-            GaugeSlot(defaultName: "PUT"),
+            GaugeSlot(defaultName: "AFR"),
             GaugeSlot(defaultName: "Engine Speed"),
-            GaugeSlot(defaultName: "MAP"),
-            GaugeSlot(),
-            GaugeSlot(),
-            GaugeSlot(),
+            GaugeSlot(defaultName: "Boost/Vacuum"),
+            GaugeSlot(defaultName: "Ign Avg"),
+            GaugeSlot(defaultName: "IAT"),
+            GaugeSlot(defaultName: "Oil Temp"),
         ]
     }
 

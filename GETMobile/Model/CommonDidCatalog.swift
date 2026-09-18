@@ -14,7 +14,11 @@ struct CommonDidEntry: Identifiable, Hashable {
     let progMin: Double
     let progMax: Double
 
-    var id: UInt16 { did }
+    // AFR/Boost-Vacuum deliberately share a DID with Lambda/MAP (same raw
+    // reading, different display conversion), so `did` can't be used as a
+    // unique SwiftUI identifier - two rows would collide. Names are unique
+    // (verified: no two catalog entries share a name), so use that instead.
+    var id: String { name }
 
     /// "PUT - 0x202a (kpa)", matching CommonDidEntry.DisplayText in the C# app.
     var displayText: String {
