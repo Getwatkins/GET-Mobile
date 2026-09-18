@@ -313,17 +313,6 @@ struct DidChannelPicker: View {
                 Section {
                     Text("Select channels to record. Each one is read with its own normal request, same as a gauge - more channels means a slower cycle, not a bigger single request.")
                         .font(.system(size: 12)).foregroundColor(.gray)
-                    HStack(spacing: 10) {
-                        Button("Select All \(CommonDidCatalog.all.count)") {
-                            logger.selectedNames = Set(CommonDidCatalog.all.map(\.name))
-                        }
-                        .font(.system(size: 13, weight: .semibold))
-                        Spacer()
-                        Button("Deselect All", role: .destructive) {
-                            logger.selectedNames.removeAll()
-                        }
-                        .font(.system(size: 13, weight: .semibold))
-                    }
                 }
                 ForEach(filtered) { entry in
                     Button {
@@ -352,6 +341,22 @@ struct DidChannelPicker: View {
             .background(GETTheme.background)
             .navigationTitle("Log Channels")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button {
+                            logger.selectedNames = Set(CommonDidCatalog.all.map(\.name))
+                        } label: {
+                            Label("Select All \(CommonDidCatalog.all.count)", systemImage: "checkmark.circle")
+                        }
+                        Button(role: .destructive) {
+                            logger.selectedNames.removeAll()
+                        } label: {
+                            Label("Deselect All", systemImage: "circle")
+                        }
+                    } label: {
+                        Text("Select")
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
