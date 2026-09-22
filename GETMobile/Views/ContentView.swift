@@ -38,7 +38,7 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if isConnectedReady || demoModeActive || activeKind != nil {
+            if isConnectedReady || demoModeActive {
                 NavigationStack(path: $path) {
                     HomeMenuView(
                         session: session,

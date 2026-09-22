@@ -69,5 +69,15 @@ struct GaugesOnlyView: View {
         .background(GETTheme.background.ignoresSafeArea())
         .navigationTitle("Gauges")
         .navigationBarTitleDisplayMode(.inline)
+        .onDisappear {
+            // Navigating away no longer means "the user tapped Stop Live" the
+            // way it implicitly did when this was one long scrolling screen -
+            // Gauges is now its own destination the user can leave mid-poll.
+            // Stop here so a live cycle can't keep running in the background
+            // and racing the next thing they open (Logging/Flash already
+            // guard against this via isHslActive, but this closes the gap
+            // sooner instead of relying on that alone).
+            session.stopLive()
+        }
     }
 }
