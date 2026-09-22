@@ -9,7 +9,7 @@ enum ConnectionKind {
 
 /// First screen shown: pick which hardware you're connecting through. Each
 /// choice pushes to its own connect screen; all three converge on the same
-/// GaugesView once connected.
+/// home hub (HomeMenuView) once connected.
 struct TransportPickerView: View {
     @ObservedObject var bridge: BridgeManager
     @ObservedObject var elm327Wifi: Elm327WifiManager

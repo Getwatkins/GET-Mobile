@@ -6,9 +6,13 @@ struct ContentView: View {
     @StateObject private var elm327Bluetooth = Elm327BluetoothManager()
     @StateObject private var gvretWifi = GvretWifiManager()
     @StateObject private var session = GaugeSessionViewModel()
+    @StateObject private var flashSession = FlashSessionViewModel()
+    @StateObject private var hslLogger = HslLoggerSession()
+    @StateObject private var didLogger = DidLoggerSession()
 
     @State private var demoModeActive = false
     @State private var activeKind: ConnectionKind?
+    @State private var path: [HomeRoute] = []
 
     private var isConnectedReady: Bool {
         switch activeKind {
@@ -35,7 +39,18 @@ struct ContentView: View {
     var body: some View {
         Group {
             if isConnectedReady || demoModeActive || activeKind != nil {
-                GaugesView(session: session, demoModeActive: $demoModeActive, transport: activeTransport, onDisconnect: disconnectActive)
+                NavigationStack(path: $path) {
+                    HomeMenuView(
+                        session: session,
+                        demoModeActive: $demoModeActive,
+                        transport: activeTransport,
+                        onDisconnect: disconnectActive,
+                        path: $path
+                    )
+                    .navigationDestination(for: HomeRoute.self) { route in
+                        destination(for: route)
+                    }
+                }
             } else {
                 TransportPickerView(
                     bridge: bridge,
@@ -63,6 +78,38 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
     }
 
+    @ViewBuilder
+    private func destination(for route: HomeRoute) -> some View {
+        switch route {
+        case .gauges:
+            GaugesOnlyView(session: session)
+        case .logging:
+            if let transport = activeTransport {
+                LoggingMenuView(session: session, transport: transport, path: $path)
+            } else {
+                EmptyView()
+            }
+        case .flash:
+            if let transport = activeTransport {
+                FlashView(session: flashSession, transport: transport, onDone: { path.removeLast() })
+            } else {
+                EmptyView()
+            }
+        case .hslDatalog:
+            if let transport = activeTransport {
+                DatalogView(logger: hslLogger, gaugeSession: session, transport: transport)
+            } else {
+                EmptyView()
+            }
+        case .standardDatalog:
+            if let transport = activeTransport {
+                DidLoggerView(logger: didLogger, gaugeSession: session, transport: transport)
+            } else {
+                EmptyView()
+            }
+        }
+    }
+
     private func disconnectActive() {
         session.stopLive()
         session.detach()
@@ -76,6 +123,7 @@ struct ContentView: View {
         activeKind = nil
         demoModeActive = false
         session.isDemoMode = false
+        path.removeAll()
     }
 }
 

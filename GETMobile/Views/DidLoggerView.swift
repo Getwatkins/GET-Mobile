@@ -13,8 +13,7 @@ struct DidLoggerView: View {
     @State private var scrubDate: Date?
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
+        ScrollView {
                 VStack(spacing: 14) {
                     header
                     controls
@@ -51,14 +50,13 @@ struct DidLoggerView: View {
             .onAppear {
                 // Same ownership lock DatalogView/HSL uses - keeps normal Live
                 // gauge polling from racing this logger on the shared transport.
-                // Acquired by GaugesView before this view was presented; not
+                // Acquired by LoggingMenuView before this screen was pushed; not
                 // re-acquired/released here so it survives SwiftUI rebuilds.
                 logger.attach(transport: transport)
             }
             .onDisappear {
                 logger.stop()
             }
-        }
     }
 
     private var header: some View {

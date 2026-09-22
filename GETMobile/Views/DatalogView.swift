@@ -12,8 +12,7 @@ struct DatalogView: View {
     @State private var selectedChartName = "Engine Speed"
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
+        ScrollView {
                 VStack(spacing: 14) {
                     header
                     controls
@@ -49,10 +48,10 @@ struct DatalogView: View {
             }
 
             .onAppear {
-                // HSL ownership was acquired by GaugesView BEFORE the full-screen
-                // cover was presented. Do not acquire/release it here: SwiftUI may
-                // rebuild this view while logging, and ownership must remain stable
-                // until the user explicitly taps Done.
+                // HSL ownership was acquired by LoggingMenuView BEFORE this
+                // screen was pushed. Do not acquire/release it here: SwiftUI
+                // may rebuild this view while logging, and ownership must
+                // remain stable until the user explicitly taps Done.
                 logger.attach(transport: transport)
             }
             .onDisappear {
@@ -60,7 +59,6 @@ struct DatalogView: View {
                 // the only place that releases the HSL ownership lock.
                 logger.stop()
             }
-        }
     }
 
     private var header: some View {
