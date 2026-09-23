@@ -14,6 +14,7 @@ struct GaugesOnlyView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
+                GETSectionLogo("Gauges")
                 if session.isDemoMode {
                     Text("DEMO MODE — values are simulated, not from a real ECU")
                         .font(.system(size: 12, weight: .bold))

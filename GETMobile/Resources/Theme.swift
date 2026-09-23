@@ -22,3 +22,31 @@ enum GETTheme {
         .system(size: size, weight: weight, design: .monospaced)
     }
 }
+
+
+/// Consistent GET logo/header used at the top of each major app section.
+struct GETSectionLogo: View {
+    let title: String?
+
+    init(_ title: String? = nil) {
+        self.title = title
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Image("LogoBanner")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: 180, maxHeight: 46)
+            if let title, !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(GETTheme.gold)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+        .accessibilityElement(children: .combine)
+    }
+}

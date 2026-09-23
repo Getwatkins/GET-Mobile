@@ -12,6 +12,7 @@ struct GvretWifiConnectView: View {
 
     var body: some View {
         VStack(spacing: 20) {
+            GETSectionLogo()
             Text("Macchina A0 (WiFi)")
                 .font(.system(size: 22, weight: .bold))
                 .foregroundColor(GETTheme.gold)

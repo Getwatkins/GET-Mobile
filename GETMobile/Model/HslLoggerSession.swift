@@ -15,7 +15,9 @@ final class HslLoggerSession: ObservableObject {
     @Published private(set) var sampleCount = 0
     @Published private(set) var startDate: Date?
     @Published private(set) var latestValues: [String: Double] = [:]
-    @Published private(set) var samples: [HslLogSample] = []
+    private(set) var samples: [HslLogSample] = []
+    /// UI/chart snapshot, throttled independently from the raw sample buffer.
+    @Published private(set) var chartSamples: [HslLogSample] = []
     @Published var selectedNames: Set<String> = ["Engine Speed", "MAP", "PUT", "Lambda", "Torque", "Pedal Pos", "IAT", "Coolant Temp"]
     @Published var sampleRate: Double = 10
     @Published var lastError: String?
@@ -107,6 +109,7 @@ final class HslLoggerSession: ObservableObject {
                     self.startDate = Date()
                     self.sampleCount = 0
                     self.samples.removeAll(keepingCapacity: true)
+                    self.chartSamples.removeAll(keepingCapacity: true)
                     self.latestValues.removeAll()
                 }
                 await self.pollLoop()
@@ -130,6 +133,7 @@ final class HslLoggerSession: ObservableObject {
 
     func clear() {
         samples.removeAll()
+        chartSamples.removeAll()
         latestValues.removeAll()
         sampleCount = 0
         startDate = nil
@@ -238,6 +242,13 @@ final class HslLoggerSession: ObservableObject {
                 if samples.count > 20_000 { samples.removeFirst(samples.count - 20_000) }
                 sampleCount = samples.count
                 latestValues = values
+                // Publishing the entire sample array at 10-20 Hz forces SwiftUI Charts
+                // to rebuild continuously and can make the view process unstable on
+                // iPhone. Keep raw samples for CSV export, but only refresh the chart
+                // snapshot about 5 times per second.
+                if chartSamples.isEmpty || samples.count % 2 == 0 {
+                    chartSamples = Array(samples.suffix(500))
+                }
                 lastError = nil
             } catch is CancellationError {
                 break

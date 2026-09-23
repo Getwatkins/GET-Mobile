@@ -13,6 +13,7 @@ struct LoggingMenuView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
+                GETSectionLogo("Logging")
                 Text("LOGGING")
                     .font(.system(size: 20, weight: .heavy))
                     .foregroundColor(GETTheme.gold)

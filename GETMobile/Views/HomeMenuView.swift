@@ -28,17 +28,20 @@ struct HomeMenuView: View {
                         .background(GETTheme.amber)
                 }
 
-                VStack(spacing: 12) {
-                    homeCard(title: "Gauges", subtitle: "Live dials and readouts", systemImage: "gauge.with.dots.needle.67percent", tint: GETTheme.amber) {
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 12),
+                    GridItem(.flexible(), spacing: 12)
+                ], spacing: 12) {
+                    homeTile(title: "Gauges", subtitle: "Live dials and readouts", systemImage: "gauge.with.dots.needle.67percent", tint: GETTheme.amber) {
                         path.append(.gauges)
                     }
 
-                    homeCard(title: "Logging", subtitle: "HSL or standard CSV datalogging", systemImage: "waveform.path.ecg", tint: GETTheme.gold) {
+                    homeTile(title: "Logging", subtitle: "HSL or standard CSV", systemImage: "waveform.path.ecg", tint: GETTheme.gold) {
                         path.append(.logging)
                     }
 
                     if transport != nil, !session.isDemoMode {
-                        homeCard(title: "Flash ECU", subtitle: "Read/write ECU firmware", systemImage: "bolt.fill", tint: GETTheme.warningRed) {
+                        homeTile(title: "Flash ECU", subtitle: "Read/write firmware", systemImage: "bolt.fill", tint: GETTheme.warningRed) {
                             session.stopLive()
                             path.append(.flash)
                         }
@@ -64,29 +67,31 @@ struct HomeMenuView: View {
         .background(GETTheme.background.ignoresSafeArea())
     }
 
-    private func homeCard(title: String, subtitle: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
+    private func homeTile(title: String, subtitle: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 14) {
+            VStack(spacing: 9) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 26))
+                    .font(.system(size: 34, weight: .semibold))
                     .foregroundColor(tint)
-                    .frame(width: 40)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundColor(.white)
-                    Text(subtitle)
-                        .font(.system(size: 12))
-                        .foregroundColor(.gray)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
+
+                Text(title)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+
+                Text(subtitle)
+                    .font(.system(size: 11))
                     .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
             }
-            .padding(16)
+            .frame(maxWidth: .infinity)
+            .aspectRatio(1, contentMode: .fit)
+            .padding(10)
             .background(GETTheme.panelBackground)
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(tint.opacity(0.6), lineWidth: 1))
-            .cornerRadius(10)
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(tint.opacity(0.65), lineWidth: 1.2))
+            .cornerRadius(12)
         }
     }
 
@@ -132,15 +137,6 @@ struct HomeMenuView: View {
     }
 
     private var header: some View {
-        VStack(spacing: 4) {
-            Image("LogoBanner")
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: 220)
-                .padding(.top, 12)
-            Text("GET Mobile")
-                .font(.system(size: 20, weight: .bold))
-                .foregroundColor(GETTheme.gold)
-        }
+        GETSectionLogo("GET Mobile")
     }
 }

@@ -12,6 +12,7 @@ struct Elm327WifiConnectView: View {
 
     var body: some View {
         VStack(spacing: 20) {
+            GETSectionLogo()
             Text("ELM327 WiFi")
                 .font(.system(size: 22, weight: .bold))
                 .foregroundColor(GETTheme.gold)

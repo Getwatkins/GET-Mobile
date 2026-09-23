@@ -9,6 +9,7 @@ struct ConnectView: View {
 
     var body: some View {
         VStack(spacing: 20) {
+            GETSectionLogo()
             Text("ESP32 Bridge")
                 .font(.system(size: 22, weight: .bold))
                 .foregroundColor(GETTheme.gold)

@@ -15,6 +15,7 @@ struct DidLoggerView: View {
     var body: some View {
         ScrollView {
                 VStack(spacing: 14) {
+                    GETSectionLogo("Standard Logger")
                     header
                     controls
                     currentValues

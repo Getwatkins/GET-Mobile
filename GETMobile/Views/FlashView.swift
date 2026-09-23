@@ -13,6 +13,7 @@ struct FlashView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
+                GETSectionLogo("Flash ECU")
                 Text("Flash ECU")
                     .font(.system(size: 22, weight: .bold))
                     .foregroundColor(GETTheme.gold)
