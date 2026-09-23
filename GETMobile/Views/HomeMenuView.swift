@@ -29,9 +29,9 @@ struct HomeMenuView: View {
                 }
 
                 LazyVGrid(columns: [
-                    GridItem(.flexible(), spacing: 12),
-                    GridItem(.flexible(), spacing: 12)
-                ], spacing: 12) {
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8)
+                ], spacing: 8) {
                     homeTile(title: "Gauges", subtitle: "Live dials and readouts", systemImage: "gauge.with.dots.needle.67percent", tint: GETTheme.amber) {
                         path.append(.gauges)
                     }
@@ -46,8 +46,15 @@ struct HomeMenuView: View {
                             path.append(.flash)
                         }
                     }
+
+                    if transport != nil, !session.isDemoMode {
+                        homeTile(title: "Diagnostics", subtitle: "Read and clear fault codes", systemImage: "exclamationmark.triangle.fill", tint: GETTheme.amber) {
+                            session.stopLive()
+                            path.append(.diagnostics)
+                        }
+                    }
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, 8)
 
                 diagnosticsLinks
 
@@ -88,7 +95,7 @@ struct HomeMenuView: View {
             }
             .frame(maxWidth: .infinity)
             .aspectRatio(1, contentMode: .fit)
-            .padding(10)
+            .padding(6)
             .background(GETTheme.panelBackground)
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(tint.opacity(0.65), lineWidth: 1.2))
             .cornerRadius(12)
