@@ -15,7 +15,6 @@ struct DidLoggerView: View {
     var body: some View {
         ScrollView {
                 VStack(spacing: 14) {
-                    GETSectionLogo("Standard Logger")
                     header
                     controls
                     currentValues
@@ -36,6 +35,7 @@ struct DidLoggerView: View {
             .background(GETTheme.background.ignoresSafeArea())
             .navigationTitle("Datalog (Standard)")
             .navigationBarTitleDisplayMode(.inline)
+            .withTopLogo()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {

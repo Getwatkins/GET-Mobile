@@ -17,8 +17,6 @@ struct HomeMenuView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                header
-
                 if session.isDemoMode {
                     Text("DEMO MODE — values are simulated, not from a real ECU")
                         .font(.system(size: 12, weight: .bold))
@@ -28,33 +26,23 @@ struct HomeMenuView: View {
                         .background(GETTheme.amber)
                 }
 
-                LazyVGrid(columns: [
-                    GridItem(.flexible(), spacing: 8),
-                    GridItem(.flexible(), spacing: 8)
-                ], spacing: 8) {
-                    homeTile(title: "Gauges", subtitle: "Live dials and readouts", systemImage: "gauge.with.dots.needle.67percent", tint: GETTheme.amber) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
+                    tile(title: "Gauges", systemImage: "gauge.with.dots.needle.67percent", tint: GETTheme.amber) {
                         path.append(.gauges)
                     }
 
-                    homeTile(title: "Logging", subtitle: "HSL or standard CSV", systemImage: "waveform.path.ecg", tint: GETTheme.gold) {
+                    tile(title: "Logging", systemImage: "waveform.path.ecg", tint: GETTheme.gold) {
                         path.append(.logging)
                     }
 
                     if transport != nil, !session.isDemoMode {
-                        homeTile(title: "Flash ECU", subtitle: "Read/write firmware", systemImage: "bolt.fill", tint: GETTheme.warningRed) {
+                        tile(title: "Flash ECU", systemImage: "bolt.fill", tint: GETTheme.warningRed) {
                             session.stopLive()
                             path.append(.flash)
                         }
                     }
-
-                    if transport != nil, !session.isDemoMode {
-                        homeTile(title: "Diagnostics", subtitle: "Read and clear fault codes", systemImage: "exclamationmark.triangle.fill", tint: GETTheme.amber) {
-                            session.stopLive()
-                            path.append(.diagnostics)
-                        }
-                    }
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal)
 
                 diagnosticsLinks
 
@@ -70,35 +58,30 @@ struct HomeMenuView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 24)
             }
+            .padding(.top, 12)
         }
         .background(GETTheme.background.ignoresSafeArea())
+        .navigationTitle("GET Mobile")
+        .navigationBarTitleDisplayMode(.inline)
+        .withTopLogo()
     }
 
-    private func homeTile(title: String, subtitle: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
+    private func tile(title: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 9) {
+            VStack(spacing: 12) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 34, weight: .semibold))
+                    .font(.system(size: 32))
                     .foregroundColor(tint)
-
                 Text(title)
-                    .font(.system(size: 18, weight: .bold))
+                    .font(.system(size: 15, weight: .bold))
                     .foregroundColor(.white)
-                    .lineLimit(1)
-
-                Text(subtitle)
-                    .font(.system(size: 11))
-                    .foregroundColor(.gray)
                     .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
             }
             .frame(maxWidth: .infinity)
             .aspectRatio(1, contentMode: .fit)
-            .padding(6)
             .background(GETTheme.panelBackground)
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(tint.opacity(0.65), lineWidth: 1.2))
-            .cornerRadius(12)
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(tint.opacity(0.6), lineWidth: 1))
+            .cornerRadius(14)
         }
     }
 
@@ -141,9 +124,5 @@ struct HomeMenuView: View {
                 BridgeDebugLogView(manager: bridge)
             }
         }
-    }
-
-    private var header: some View {
-        GETSectionLogo("GET Mobile")
     }
 }

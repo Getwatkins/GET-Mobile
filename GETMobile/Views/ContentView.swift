@@ -95,12 +95,6 @@ struct ContentView: View {
             } else {
                 EmptyView()
             }
-        case .diagnostics:
-            if let transport = activeTransport {
-                DiagnosticsView(gaugeSession: session, transport: transport)
-            } else {
-                EmptyView()
-            }
         case .hslDatalog:
             if let transport = activeTransport {
                 DatalogView(logger: hslLogger, gaugeSession: session, transport: transport)

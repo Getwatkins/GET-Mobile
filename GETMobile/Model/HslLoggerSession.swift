@@ -15,9 +15,7 @@ final class HslLoggerSession: ObservableObject {
     @Published private(set) var sampleCount = 0
     @Published private(set) var startDate: Date?
     @Published private(set) var latestValues: [String: Double] = [:]
-    private(set) var samples: [HslLogSample] = []
-    /// UI/chart snapshot, throttled independently from the raw sample buffer.
-    @Published private(set) var chartSamples: [HslLogSample] = []
+    @Published private(set) var samples: [HslLogSample] = []
     @Published var selectedNames: Set<String> = ["Engine Speed", "MAP", "PUT", "Lambda", "Torque", "Pedal Pos", "IAT", "Coolant Temp"]
     @Published var sampleRate: Double = 10
     @Published var lastError: String?
@@ -30,6 +28,22 @@ final class HslLoggerSession: ObservableObject {
     private var allPids = HslPidCatalog.all
     private var variables: [String: Double] = [:]
     private var rawVariables: [String: Double] = [:]
+
+    /// HSL can realistically sustain a much higher sample rate than the
+    /// Standard/DID logger (one combined request returns every channel,
+    /// vs. one request per channel there) - up to 20Hz is selectable. Every
+    /// `samples.append` is a `@Published` change that drives a full Swift
+    /// Charts re-render, which is expensive enough that doing it 10-20
+    /// times a second was, in practice, backing up the main thread faster
+    /// than it could keep up - severe enough to eventually get the app
+    /// killed as unresponsive after several seconds. Full-rate polling and
+    /// recording is still genuinely valuable for CSV accuracy, so instead
+    /// of slowing that down, only the *publish* of new samples (what makes
+    /// the chart re-render) is capped to this rate; recording continues at
+    /// whatever the poll loop actually achieves.
+    private var pendingSamples: [HslLogSample] = []
+    private var lastSamplesFlush = Date.distantPast
+    private let samplesPublishInterval: TimeInterval = 0.1
     private var logFileURL: URL?
 
     var selectedPids: [HslPid] {
@@ -109,7 +123,8 @@ final class HslLoggerSession: ObservableObject {
                     self.startDate = Date()
                     self.sampleCount = 0
                     self.samples.removeAll(keepingCapacity: true)
-                    self.chartSamples.removeAll(keepingCapacity: true)
+                    self.pendingSamples.removeAll(keepingCapacity: true)
+                    self.lastSamplesFlush = .distantPast
                     self.latestValues.removeAll()
                 }
                 await self.pollLoop()
@@ -133,7 +148,8 @@ final class HslLoggerSession: ObservableObject {
 
     func clear() {
         samples.removeAll()
-        chartSamples.removeAll()
+        pendingSamples.removeAll()
+        lastSamplesFlush = .distantPast
         latestValues.removeAll()
         sampleCount = 0
         startDate = nil
@@ -238,18 +254,19 @@ final class HslLoggerSession: ObservableObject {
                 }
                 let values = try decode(payload)
                 let now = Date()
-                samples.append(HslLogSample(timestamp: now, values: values))
-                if samples.count > 20_000 { samples.removeFirst(samples.count - 20_000) }
-                sampleCount = samples.count
+                pendingSamples.append(HslLogSample(timestamp: now, values: values))
                 latestValues = values
-                // Publishing the entire sample array at 10-20 Hz forces SwiftUI Charts
-                // to rebuild continuously and can make the view process unstable on
-                // iPhone. Keep raw samples for CSV export, but only refresh the chart
-                // snapshot about 5 times per second.
-                if chartSamples.isEmpty || samples.count % 2 == 0 {
-                    chartSamples = Array(samples.suffix(500))
-                }
                 lastError = nil
+                // Flush into the published `samples` (and therefore the
+                // chart) at most every samplesPublishInterval, not on every
+                // single poll - see the comment on these properties above.
+                if now.timeIntervalSince(lastSamplesFlush) >= samplesPublishInterval {
+                    samples.append(contentsOf: pendingSamples)
+                    pendingSamples.removeAll(keepingCapacity: true)
+                    if samples.count > 20_000 { samples.removeFirst(samples.count - 20_000) }
+                    sampleCount = samples.count
+                    lastSamplesFlush = now
+                }
             } catch is CancellationError {
                 break
             } catch let error as HslError {
@@ -271,6 +288,16 @@ final class HslLoggerSession: ObservableObject {
             if elapsed < target {
                 try? await Task.sleep(nanoseconds: UInt64((target - elapsed) * 1_000_000_000.0))
             }
+        }
+        // Flush anything recorded since the last publish - otherwise the
+        // final fraction-of-a-second of samples would be silently dropped
+        // from both the chart and CSV export just because the loop ended
+        // before the next scheduled flush.
+        if !pendingSamples.isEmpty {
+            samples.append(contentsOf: pendingSamples)
+            pendingSamples.removeAll(keepingCapacity: true)
+            if samples.count > 20_000 { samples.removeFirst(samples.count - 20_000) }
+            sampleCount = samples.count
         }
         isRunning = false
     }

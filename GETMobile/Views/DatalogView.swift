@@ -14,7 +14,6 @@ struct DatalogView: View {
     var body: some View {
         ScrollView {
                 VStack(spacing: 14) {
-                    GETSectionLogo("HSL Datalogger")
                     header
                     controls
                     currentValues
@@ -35,6 +34,7 @@ struct DatalogView: View {
             .background(GETTheme.background.ignoresSafeArea())
             .navigationTitle("Datalog")
             .navigationBarTitleDisplayMode(.inline)
+            .withTopLogo()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
@@ -201,7 +201,7 @@ struct DatalogView: View {
                 .pickerStyle(.menu)
             }
             Chart {
-                ForEach(logger.chartSamples) { sample in
+                ForEach(Array(logger.samples.suffix(500))) { sample in
                     if let value = sample.values[selectedChartName] {
                         LineMark(
                             x: .value("Time", sample.timestamp),

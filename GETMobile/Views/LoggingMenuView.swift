@@ -13,7 +13,6 @@ struct LoggingMenuView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
-                GETSectionLogo("Logging")
                 Text("LOGGING")
                     .font(.system(size: 20, weight: .heavy))
                     .foregroundColor(GETTheme.gold)
@@ -47,6 +46,7 @@ struct LoggingMenuView: View {
         .background(GETTheme.background.ignoresSafeArea())
         .navigationTitle("Logging")
         .navigationBarTitleDisplayMode(.inline)
+        .withTopLogo()
     }
 
     private func card(title: String, subtitle: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {

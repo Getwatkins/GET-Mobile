@@ -183,19 +183,6 @@ final class UdsClient {
         return payload
     }
 
-    // MARK: ClearDiagnosticInformation (0x14)
-
-    func clearDiagnosticInformation(groupOfDTC: UInt32 = 0xFFFFFF) async throws {
-        let request = Data([
-            UdsServiceId.clearDiagnosticInformation.rawValue,
-            UInt8((groupOfDTC >> 16) & 0xFF),
-            UInt8((groupOfDTC >> 8) & 0xFF),
-            UInt8(groupOfDTC & 0xFF)
-        ])
-        let response = try await sendRequest(request)
-        _ = try UdsPdu.parseResponse(.clearDiagnosticInformation, response, hasSubfunctionEcho: false)
-    }
-
     // MARK: WriteDataByIdentifier (0x2E)
 
     func writeDataByIdentifier(_ did: UInt16, data: Data) async throws {

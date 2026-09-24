@@ -14,7 +14,6 @@ struct GaugesOnlyView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                GETSectionLogo("Gauges")
                 if session.isDemoMode {
                     Text("DEMO MODE — values are simulated, not from a real ECU")
                         .font(.system(size: 12, weight: .bold))
@@ -70,6 +69,7 @@ struct GaugesOnlyView: View {
         .background(GETTheme.background.ignoresSafeArea())
         .navigationTitle("Gauges")
         .navigationBarTitleDisplayMode(.inline)
+        .withTopLogo()
         .onDisappear {
             // Navigating away no longer means "the user tapped Stop Live" the
             // way it implicitly did when this was one long scrolling screen -

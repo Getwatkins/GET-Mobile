@@ -9,7 +9,6 @@ struct Elm327BluetoothConnectView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            GETSectionLogo()
             Text("ELM327 Bluetooth")
                 .font(.system(size: 22, weight: .bold))
                 .foregroundColor(GETTheme.gold)

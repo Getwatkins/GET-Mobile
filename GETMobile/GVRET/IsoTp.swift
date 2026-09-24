@@ -167,7 +167,6 @@ final class IsoTpSession {
         case flowControlOverflow
         case unexpectedFrame
         case sequenceMismatch(expected: UInt8, got: UInt8)
-        case invalidLength(Int)
 
         var errorDescription: String? {
             switch self {
@@ -176,8 +175,6 @@ final class IsoTpSession {
             case .unexpectedFrame: return "Received an unexpected/malformed ISO-TP frame."
             case .sequenceMismatch(let expected, let got):
                 return "ISO-TP consecutive frame out of sequence (expected \(expected), got \(got))."
-            case .invalidLength(let length):
-                return "ISO-TP response length is invalid: \(length) bytes."
             }
         }
     }
@@ -284,12 +281,6 @@ final class IsoTpSession {
             return data
 
         case .firstFrame(let totalLength, let data):
-            // Classic CAN ISO-TP uses a 12-bit length field. Treat a bogus
-            // first-frame length as a protocol error instead of entering a
-            // long receive loop and retaining an ever-growing response buffer.
-            guard totalLength > 0, totalLength <= 4095 else {
-                throw IsoTpError.invalidLength(totalLength)
-            }
             var collected = data
             // Send Flow Control: continue-to-send, no block-size limit, no
             // minimum separation time - we can keep up with whatever the ECU sends.
