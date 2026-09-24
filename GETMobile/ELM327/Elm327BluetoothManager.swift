@@ -41,6 +41,9 @@ final class Elm327BluetoothManager: NSObject, ObservableObject, UdsTransport {
     private var lineBuffer = Data()
     private var pendingContinuation: CheckedContinuation<String, Error>?
     private var pendingTimeoutTask: Task<Void, Never>?
+    /// CAN IDs the adapter's ATSH/ATCRA are currently set to (setup uses 7E0/7E8).
+    private var currentTxID: UInt16 = BridgeProtocol.simos18RequestID
+    private var currentRxID: UInt16 = BridgeProtocol.simos18ResponseID
 
     override init() {
         super.init()
@@ -93,6 +96,14 @@ final class Elm327BluetoothManager: NSObject, ObservableObject, UdsTransport {
 
     func sendRequest(rxID: UInt16, txID: UInt16, payload: Data, timeoutSeconds: Double = 2.0) async throws -> Data {
         guard state == .ready else { throw Elm327Error.notReady }
+        // Follow the request's CAN IDs (default 7E0/7E8 = no extra traffic).
+        if txID != currentTxID || rxID != currentRxID {
+            for cmd in Elm327Protocol.retargetCommands(txID: txID, rxID: rxID) {
+                _ = try? await sendLine(Elm327Protocol.command(cmd), timeoutSeconds: 3.0)
+            }
+            currentTxID = txID
+            currentRxID = rxID
+        }
         let raw = try await sendLine(Elm327Protocol.requestLine(for: payload), timeoutSeconds: timeoutSeconds)
         guard let data = Elm327Protocol.extractUdsResponse(from: raw) else { throw Elm327Error.malformedResponse }
         return data
@@ -144,6 +155,9 @@ final class Elm327BluetoothManager: NSObject, ObservableObject, UdsTransport {
     }
 
     private func runSetupSequence() async {
+        // ATZ below resets the adapter's headers to the setup defaults.
+        currentTxID = BridgeProtocol.simos18RequestID
+        currentRxID = BridgeProtocol.simos18ResponseID
         for cmd in Elm327Protocol.setupCommands {
             _ = try? await sendLine(Elm327Protocol.command(cmd), timeoutSeconds: 3.0)
             if cmd == "ATZ" { try? await Task.sleep(nanoseconds: 1_000_000_000) }

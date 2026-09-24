@@ -4,6 +4,7 @@ import Foundation
 enum UdsServiceId: UInt8 {
     case diagnosticSessionControl = 0x10
     case ecuReset = 0x11
+    case clearDiagnosticInformation = 0x14
     case readDTCInformation = 0x19
     case readDataByIdentifier = 0x22
     case securityAccess = 0x27

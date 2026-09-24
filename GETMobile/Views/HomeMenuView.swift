@@ -36,6 +36,11 @@ struct HomeMenuView: View {
                     }
 
                     if transport != nil, !session.isDemoMode {
+                        tile(title: "Diagnostics", systemImage: "wrench.and.screwdriver", tint: GETTheme.gold) {
+                            session.stopLive()
+                            path.append(.diagnostics)
+                        }
+
                         tile(title: "Flash ECU", systemImage: "bolt.fill", tint: GETTheme.warningRed) {
                             session.stopLive()
                             path.append(.flash)

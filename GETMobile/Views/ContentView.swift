@@ -9,6 +9,7 @@ struct ContentView: View {
     @StateObject private var flashSession = FlashSessionViewModel()
     @StateObject private var hslLogger = HslLoggerSession()
     @StateObject private var didLogger = DidLoggerSession()
+    @StateObject private var diagnostics = DiagnosticsSession()
 
     @State private var demoModeActive = false
     @State private var activeKind: ConnectionKind?
@@ -89,6 +90,12 @@ struct ContentView: View {
             } else {
                 EmptyView()
             }
+        case .diagnostics:
+            if let transport = activeTransport {
+                DiagnosticsView(diag: diagnostics, gaugeSession: session, transport: transport)
+            } else {
+                EmptyView()
+            }
         case .flash:
             if let transport = activeTransport {
                 FlashView(session: flashSession, transport: transport, onDone: { path.removeLast() })
@@ -112,6 +119,7 @@ struct ContentView: View {
 
     private func disconnectActive() {
         session.stopLive()
+        diagnostics.reset()
         session.detach()
         switch activeKind {
         case .esp32Bridge: bridge.disconnect()

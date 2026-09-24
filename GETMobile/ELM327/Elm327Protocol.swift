@@ -37,6 +37,15 @@ enum Elm327Protocol {
 
     static func command(_ command: String) -> String { command + "\r" }
 
+    /// AT commands to retarget the adapter at a different module. The
+    /// setup sequence fixes ATSH/ATCRA at 7E0/7E8 (ECM); the diagnostics
+    /// screen also talks to the TCM (7E1/7E9) and sends the functional
+    /// OBD clear (7DF-style broadcast), so the headers must follow each
+    /// request's IDs instead of silently answering from the wrong module.
+    static func retargetCommands(txID: UInt16, rxID: UInt16) -> [String] {
+        [String(format: "ATSH%03X", txID), String(format: "ATCRA%03X", rxID)]
+    }
+
     /// Pulls the UDS response bytes back out of whatever the adapter sent.
     /// Strips everything that isn't a hex character (handles the '>' prompt,
     /// stray CR/LF, and an optional "7E8" header prefix if ATH1 kept it),
@@ -65,7 +74,7 @@ enum Elm327Protocol {
         // responses (0x7E.../0x50...) aren't silently dropped as
         // unrecognized - those don't start with 0x62 and would otherwise
         // never be found here.
-        guard let startIdx = bytes.firstIndex(where: { $0 == 0x62 || $0 == 0x7F || $0 == 0x7E || $0 == 0x50 }) else { return nil }
+        guard let startIdx = bytes.firstIndex(where: { $0 == 0x62 || $0 == 0x7F || $0 == 0x7E || $0 == 0x50 || $0 == 0x59 || $0 == 0x54 || $0 == 0x44 }) else { return nil }
         return Data(bytes[startIdx...])
     }
 }

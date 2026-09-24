@@ -183,6 +183,22 @@ final class UdsClient {
         return payload
     }
 
+    // MARK: ClearDiagnosticInformation (0x14)
+
+    /// Clears stored DTCs on this module. `groupOfDtc` 0xFFFFFF means "all
+    /// groups" (ISO 14229-1), which is what a scan tool's "Clear DTCs"
+    /// does. Positive response is just the bare 0x54.
+    func clearDiagnosticInformation(groupOfDtc: UInt32 = 0xFFFFFF) async throws {
+        let group = Data([
+            UInt8((groupOfDtc >> 16) & 0xFF),
+            UInt8((groupOfDtc >> 8) & 0xFF),
+            UInt8(groupOfDtc & 0xFF),
+        ])
+        let request = UdsPdu.buildRequest(.clearDiagnosticInformation, data: group)
+        let response = try await sendRequest(request)
+        _ = try UdsPdu.parseResponse(.clearDiagnosticInformation, response, hasSubfunctionEcho: false)
+    }
+
     // MARK: WriteDataByIdentifier (0x2E)
 
     func writeDataByIdentifier(_ did: UInt16, data: Data) async throws {

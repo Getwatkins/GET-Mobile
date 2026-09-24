@@ -1,0 +1,168 @@
+code,name
+P0218,Transmission Over Temperature Condition
+P0500,Vehicle Speed Sensor A
+P0501,Vehicle Speed Sensor A Range/Performance
+P0502,Vehicle Speed Sensor A Low
+P0503,Vehicle Speed Sensor A Intermittent/Erratic/High
+P0560,System Voltage
+P0561,System Voltage Low
+P0562,System Voltage High
+P0600,Serial Communication Link
+P0601,Internal Control Module Memory Check Sum Error
+P0602,Control Module Programming Error
+P0603,Internal Control Module Keep Alive Memory (KAM) Error
+P0604,Internal Control Module Random Access Memory (RAM) Error
+P0605,Internal Control Module Read Only Memory (ROM) Error
+P0606,Control Module Processor
+P0607,Control Module Performance
+P0700,Transmission Control System (MIL Request)
+P0701,Transmission Control System Range/Performance
+P0702,Transmission Control System Electrical
+P0703,Brake Switch B Circuit
+P0704,Clutch Switch Input Circuit
+P0705,Transmission Range Sensor Circuit (PRNDL Input)
+P0706,Transmission Range Sensor Circuit Range/Performance
+P0707,Transmission Range Sensor Circuit Low
+P0708,Transmission Range Sensor Circuit High
+P0709,Transmission Range Sensor Circuit Intermittent
+P0710,Transmission Fluid Temperature Sensor A Circuit
+P0711,Transmission Fluid Temperature Sensor A Circuit Range/Performance
+P0712,Transmission Fluid Temperature Sensor A Circuit Low
+P0713,Transmission Fluid Temperature Sensor A Circuit High
+P0714,Transmission Fluid Temperature Sensor A Circuit Intermittent
+P0715,Input/Turbine Speed Sensor A Circuit
+P0716,Input/Turbine Speed Sensor A Circuit Range/Performance
+P0717,Input/Turbine Speed Sensor A Circuit No Signal
+P0718,Input/Turbine Speed Sensor A Circuit Intermittent
+P0719,Brake Switch B Circuit Low
+P0720,Output Speed Sensor Circuit
+P0721,Output Speed Sensor Circuit Range/Performance
+P0722,Output Speed Sensor Circuit No Signal
+P0723,Output Speed Sensor Circuit Intermittent
+P0724,Brake Switch B Circuit High
+P0725,Engine Speed Input Circuit
+P0726,Engine Speed Input Circuit Range/Performance
+P0727,Engine Speed Input Circuit No Signal
+P0728,Engine Speed Input Circuit Intermittent
+P0729,Gear 6 Incorrect Ratio
+P0730,Incorrect Gear Ratio
+P0731,Gear 1 Incorrect Ratio
+P0732,Gear 2 Incorrect Ratio
+P0733,Gear 3 Incorrect Ratio
+P0734,Gear 4 Incorrect Ratio
+P0735,Gear 5 Incorrect Ratio
+P0736,Reverse Incorrect Ratio
+P0737,TCM Engine Speed Output Circuit
+P0738,TCM Engine Speed Output Circuit Low
+P0739,TCM Engine Speed Output Circuit High
+P0740,Torque Converter Clutch Circuit/Open
+P0741,Torque Converter Clutch Circuit Performance or Stuck Off
+P0742,Torque Converter Clutch Circuit Stuck On
+P0743,Torque Converter Clutch Circuit Electrical
+P0744,Torque Converter Clutch Circuit Intermittent
+P0745,Pressure Control Solenoid A
+P0746,Pressure Control Solenoid A Performance or Stuck Off
+P0747,Pressure Control Solenoid A Stuck On
+P0748,Pressure Control Solenoid A Electrical
+P0749,Pressure Control Solenoid A Intermittent
+P0750,Shift Solenoid A
+P0751,Shift Solenoid A Performance or Stuck Off
+P0752,Shift Solenoid A Stuck On
+P0753,Shift Solenoid A Electrical
+P0754,Shift Solenoid A Intermittent
+P0755,Shift Solenoid B
+P0756,Shift Solenoid B Performance or Stuck Off
+P0757,Shift Solenoid B Stuck On
+P0758,Shift Solenoid B Electrical
+P0759,Shift Solenoid B Intermittent
+P075A,Shift Solenoid C
+P075B,Shift Solenoid C Performance or Stuck Off
+P075C,Shift Solenoid C Stuck On
+P075D,Shift Solenoid C Electrical
+P075E,Shift Solenoid C Intermittent
+P075F,Shift Solenoid D
+P0760,Shift Solenoid D Performance or Stuck Off
+P0761,Shift Solenoid D Stuck On
+P0762,Shift Solenoid D Electrical
+P0763,Shift Solenoid D Intermittent
+P0764,Shift Solenoid E
+P0765,Shift Solenoid E Performance or Stuck Off
+P0766,Shift Solenoid E Stuck On
+P0767,Shift Solenoid E Electrical
+P0768,Shift Solenoid E Intermittent
+P0775,Pressure Control Solenoid B
+P0776,Pressure Control Solenoid B Performance or Stuck Off
+P0777,Pressure Control Solenoid B Stuck On
+P0778,Pressure Control Solenoid B Electrical
+P0779,Pressure Control Solenoid B Intermittent
+P0780,Shift Malfunction
+P0781,1-2 Shift Malfunction
+P0782,2-3 Shift Malfunction
+P0783,3-4 Shift Malfunction
+P0784,4-5 Shift Malfunction
+P0785,Shift/Timing Solenoid
+P0786,Shift/Timing Solenoid Range/Performance
+P0787,Shift/Timing Solenoid Low
+P0788,Shift/Timing Solenoid High
+P0789,Shift/Timing Solenoid Intermittent
+P0790,Normal/Performance Switch Circuit
+P0791,Intermediate Shaft Speed Sensor A Circuit
+P0792,Intermediate Shaft Speed Sensor A Circuit Range/Performance
+P0793,Intermediate Shaft Speed Sensor A Circuit No Signal
+P0794,Intermediate Shaft Speed Sensor A Circuit Intermittent
+P0795,Pressure Control Solenoid C
+P0796,Pressure Control Solenoid C Performance or Stuck Off
+P0797,Pressure Control Solenoid C Stuck On
+P0798,Pressure Control Solenoid C Electrical
+P0799,Pressure Control Solenoid C Intermittent
+P0801,Reverse Inhibit Control Circuit
+P0803,1-4 Upshift (Skip Shift) Solenoid Control Circuit
+P0804,1-4 Upshift (Skip Shift) Lamp Control Circuit
+P0805,Clutch Position Sensor Circuit
+P0806,Clutch Position Sensor Circuit Range/Performance
+P0807,Clutch Position Sensor Circuit Low
+P0808,Clutch Position Sensor Circuit High
+P0809,Clutch Position Sensor Circuit Intermittent
+P080A,Clutch Position Control Error
+P080B,Excessive Clutch Slippage
+P080C,Reverse Input Circuit
+P080D,Reverse Output Circuit
+P080E,Transmission Range Display Circuit
+P080F,Upshift Switch Circuit
+P0810,Downshift Switch Circuit
+P0811,Starter Disable Circuit
+P0812,Driveline Disconnect Switch Input Circuit
+P0813,Up and Down Shift Switch to Transmission Range Correlation
+P0840,Transmission Fluid Pressure Sensor/Switch A Circuit
+P0841,Transmission Fluid Pressure Sensor/Switch A Circuit Range/Performance
+P0842,Transmission Fluid Pressure Sensor/Switch A Circuit Low
+P0843,Transmission Fluid Pressure Sensor/Switch A Circuit High
+P0844,Transmission Fluid Pressure Sensor/Switch A Circuit Intermittent
+P0845,Transmission Fluid Pressure Sensor/Switch B Circuit
+P0846,Transmission Fluid Pressure Sensor/Switch B Circuit Range/Performance
+P0847,Transmission Fluid Pressure Sensor/Switch B Circuit Low
+P0848,Transmission Fluid Pressure Sensor/Switch B Circuit High
+P0849,Transmission Fluid Pressure Sensor/Switch B Circuit Intermittent
+P0863,TCM Communication Circuit
+P0864,TCM Communication Circuit Range/Performance
+P0865,TCM Communication Circuit Low
+P0866,TCM Communication Circuit High
+P0868,Transmission Fluid Pressure Low
+P0869,Transmission Fluid Pressure High
+P0894,Transmission Component Slipping
+P0895,Shift Time Too Short
+P0896,Shift Time Too Long
+P0897,Transmission Fluid Deteriorated
+P1735,Position Sensor for Clutch 1: Electrical Malfunction
+P1736,Position Sensor for Clutch 2: Electrical Malfunction
+U0001,High Speed CAN Communication Bus
+U0002,High Speed CAN Communication Bus Performance
+U0073,Control Module Communication Bus A Off
+U0100,Lost Communication With ECM/PCM A
+U0101,Lost Communication With TCM
+U0121,Lost Communication With Anti-Lock Brake System (ABS) Control Module
+U0140,Lost Communication With Body Control Module
+U0155,Lost Communication With Instrument Panel Cluster (IPC) Control Module
+U0401,Invalid Data Received From ECM/PCM A
+U0402,Invalid Data Received From Transmission Control Module
+U0415,Invalid Data Received From Anti-Lock Brake System Control Module

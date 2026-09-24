@@ -7,6 +7,7 @@ import Foundation
 enum HomeRoute: Hashable {
     case gauges
     case logging
+    case diagnostics
     case flash
     case hslDatalog
     case standardDatalog
