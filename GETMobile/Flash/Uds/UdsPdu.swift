@@ -1,6 +1,5 @@
 import Foundation
 
-/// Port of Communication/J2534/Uds/UdsPdu.cs.
 enum UdsServiceId: UInt8 {
     case diagnosticSessionControl = 0x10
     case ecuReset = 0x11
@@ -28,7 +27,6 @@ enum UdsRoutineControlType: UInt8 {
     case requestResults = 3
 }
 
-/// Standard ISO 14229-1 negative response codes (for accurate error messages).
 enum UdsNegativeResponseCode: UInt8 {
     case generalReject = 0x10
     case serviceNotSupported = 0x11
@@ -67,12 +65,6 @@ struct UdsNegativeResponseException: Error, LocalizedError {
     }
 }
 
-/// Minimal standard UDS request/response framing. Not VW-specific and not
-/// reverse-engineered - this is exactly what ISO 14229-1 documents:
-///
-///   Request:           [SID] [subfunction?] [data...]
-///   Positive response: [SID + 0x40] [subfunction echo?] [data...]
-///   Negative response: [0x7F] [SID] [NRC]
 enum UdsPdu {
     static let negativeResponseSid: UInt8 = 0x7F
 
@@ -101,10 +93,6 @@ enum UdsPdu {
         }
     }
 
-    /// Validates a response against the expected service, throwing
-    /// UdsNegativeResponseException on a 0x7F negative response. Returns
-    /// the response payload with the SID (and, if present, subfunction
-    /// echo) stripped off.
     static func parseResponse(_ expectedSid: UdsServiceId, _ response: Data, hasSubfunctionEcho: Bool) throws -> (payload: Data, subfunctionEcho: UInt8?) {
         guard !response.isEmpty else { throw ParseError.emptyResponse }
         let bytes = [UInt8](response)

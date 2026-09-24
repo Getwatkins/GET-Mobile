@@ -115,14 +115,10 @@ final class UdsClient {
 
     // MARK: RequestDownload (0x34)
 
-    /// Mirrors client.request_download(memloc, dfi): blockIdentifier encoded
-    /// as a single-byte address (address_format=8), blockLength as a 4-byte
-    /// big-endian size (memorysize_format=32) - matching flash_block()'s
-    /// exact encoding, not a general-purpose arbitrary-format implementation.
     @discardableResult
     func requestDownload(blockIdentifier: UInt8, blockLength: UInt32, compressionType: UInt8, encryptionType: UInt8) async throws -> Data {
         let dfiByte = ((compressionType & 0xF) << 4) | (encryptionType & 0xF)
-        let alfidByte: UInt8 = 0x41 // (memorysize_format=32 -> 4 bytes) << 4 | (address_format=8 -> 1 byte)
+        let alfidByte: UInt8 = 0x41
 
         var payload = Data()
         payload.append(dfiByte)
@@ -141,8 +137,6 @@ final class UdsClient {
 
     // MARK: TransferData (0x36)
 
-    /// Mirrors client.transfer_data(sequence_number, data), including
-    /// validating the echoed sequence number matches what was sent.
     func transferData(sequenceNumber: UInt8, data: Data) async throws {
         var payload = Data([sequenceNumber])
         payload.append(data)
@@ -158,7 +152,6 @@ final class UdsClient {
         }
     }
 
-    /// Mirrors flash_uds.py's counter wraparound (next_counter): 1..0xFF then wraps to 0, not back to 1.
     static func nextTransferCounter(_ counter: UInt8) -> UInt8 {
         counter == 0xFF ? 0 : counter + 1
     }
@@ -195,6 +188,7 @@ final class UdsClient {
             UInt8(groupOfDtc & 0xFF),
         ])
         let request = UdsPdu.buildRequest(.clearDiagnosticInformation, data: group)
+
         let response = try await sendRequest(request)
         _ = try UdsPdu.parseResponse(.clearDiagnosticInformation, response, hasSubfunctionEcho: false)
     }
@@ -263,8 +257,6 @@ final class UdsClient {
         }
     }
 
-    /// Requests a seed for the given security level (must be the odd
-    /// subfunction value, e.g. 0x11) and returns the raw seed bytes.
     func requestSeed(level: UInt8, seedParams: Data? = nil) async throws -> Data {
         let request = UdsPdu.buildRequest(.securityAccess, subfunction: level, data: seedParams)
         let response = try await sendRequest(request)
@@ -274,7 +266,6 @@ final class UdsClient {
         return payload
     }
 
-    /// Sends a computed key for the given (even) security level, e.g. 0x12.
     func sendKey(level: UInt8, key: Data) async throws {
         let request = UdsPdu.buildRequest(.securityAccess, subfunction: level, data: key)
         let response = try await sendRequest(request)
@@ -283,21 +274,12 @@ final class UdsClient {
         guard echoedLevel == level else { throw SecurityError.echoedWrongLevel(got: echoedLevel, expected: level) }
     }
 
-    /// Full SA2 Seed/Key unlock: request seed at requestSeedLevel (must be
-    /// odd, e.g. 0x11), compute the key by running sa2Script against the
-    /// seed via Sa2SeedKeyVm, and send it at sendKeyLevel (the corresponding
-    /// even value, e.g. 0x12). Mirrors flash_uds.py's
-    /// volkswagen_security_algo + client.unlock_security_access(17),
-    /// including udsoncan's "all-zero seed means already unlocked, skip the
-    /// key send" check.
     func unlockSecurityAccess(requestSeedLevel: UInt8, sendKeyLevel: UInt8, sa2Script: [UInt8]) async throws {
         let seed = try await requestSeed(level: requestSeedLevel)
 
         let seedBytes = [UInt8](seed)
         let seedIsAllZero = !seedBytes.contains { $0 != 0 }
-        if !seedBytes.isEmpty, seedIsAllZero {
-            return // already unlocked - matches udsoncan's behavior exactly
-        }
+        if !seedBytes.isEmpty, seedIsAllZero { return }
 
         let seedValue = bytesToUInt32BigEndian(seedBytes)
         let keyValue = try Sa2SeedKeyVm(instructionTape: sa2Script, seed: seedValue).execute()
@@ -307,7 +289,6 @@ final class UdsClient {
     }
 
     private func bytesToUInt32BigEndian(_ bytes: [UInt8]) -> UInt32 {
-        // Only ever a 4-byte seed for SA2, but tolerate shorter/longer defensively rather than assuming.
         var value: UInt32 = 0
         for b in bytes { value = (value << 8) | UInt32(b) }
         return value
