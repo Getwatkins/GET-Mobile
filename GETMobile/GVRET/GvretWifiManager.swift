@@ -34,6 +34,15 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     // dropped a matching frame whenever no continuation was installed yet,
     // which made VIN and other multi-frame UDS reads time out. Keep a small
     // per-ID queue so frames are never lost between ISO-TP receive steps.
+    //
+    // Scope: valid ONLY within the one top-level request/response cycle that
+    // filled it. sendRequest/sendHslRequest clear the entry for their own
+    // rxID before starting, specifically so a frame left behind by an
+    // earlier, already-finished conversation on the same ID can never be
+    // handed to a later, unrelated one as if it were the real answer - see
+    // v46 notes: this is believed to be why HSL stopped starting after a
+    // Diagnostics DTC read (multi-frame, unlike the mostly single-frame
+    // gauge/DID reads that were the only other traffic on 0x7E8 before).
     private var receivedFrameQueues: [UInt32: [[UInt8]]] = [:]
     private let maxQueuedFramesPerID = 32
 
@@ -185,6 +194,9 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         guard state == .ready else { throw GvretError.notReady }
         pendingFrameRxID = UInt32(rxID)
         pendingFrameTxID = UInt32(txID)
+        // Discard anything left queued for this ID by an earlier, already-
+        // finished request (see the doc comment on receivedFrameQueues).
+        receivedFrameQueues[UInt32(rxID)] = nil
         log("UDS request: TX=0x\(String(txID, radix: 16, uppercase: true)) RX=0x\(String(rxID, radix: 16, uppercase: true)) payload=\(hexString([UInt8](payload)))")
         try await isoTp.send([UInt8](payload), txID: UInt32(txID), timeoutSeconds: timeoutSeconds)
         let response = try await isoTp.receive(rxID: UInt32(rxID), txID: UInt32(txID), timeoutSeconds: timeoutSeconds)
@@ -211,6 +223,10 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         defer { hslRequestInFlight = false }
         pendingFrameRxID = UInt32(BridgeProtocol.simos18ResponseID)
         pendingFrameTxID = UInt32(BridgeProtocol.simos18RequestID)
+        // Same reason as sendRequest: a frame left over on 0x7E8 from
+        // whatever talked to the ECU right before HSL (Diagnostics, most
+        // likely) must not be handed to HSL as if it were its own reply.
+        receivedFrameQueues[UInt32(BridgeProtocol.simos18ResponseID)] = nil
         log("HSL ISO-TP START: TX=0x7E0 RX=0x7E8 payloadBytes=\(payload.count) expectedResponseBytes=\(expectedPayloadBytes)")
         log("HSL ISO-TP payload: \(hexString([UInt8](payload)))")
 

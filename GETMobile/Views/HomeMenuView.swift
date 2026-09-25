@@ -76,21 +76,22 @@ struct HomeMenuView: View {
 
     private func tile(title: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 14) {
+            VStack(spacing: 16) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 40))
+                    .font(.system(size: 48))
                     .foregroundColor(tint)
                 Text(title)
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.system(size: 19, weight: .bold))
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
-            .aspectRatio(1, contentMode: .fit)
+            // Ratio < 1 makes each tile noticeably TALLER than it is wide
+            // (0.72 -> height is ~1.4x the width) on top of the earlier
+            // edge-to-edge width change, so the size increase is obvious
+            // rather than the ~13% from just tightening the old gutters.
+            .aspectRatio(0.72, contentMode: .fit)
             .background(GETTheme.panelBackground)
-            // Small radius rather than the old 14pt - with the tiles now
-            // touching edge-to-edge, a big radius leaves a visible gap at
-            // every corner where two (or four) tiles meet.
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(tint.opacity(0.6), lineWidth: 1))
             .cornerRadius(4)
         }

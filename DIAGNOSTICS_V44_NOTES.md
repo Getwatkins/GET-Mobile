@@ -95,3 +95,53 @@ corner where tiles meet.
 
 ## Logo
 Nav bar logo height 26pt -> 34pt.
+
+---
+
+# v46 — home tiles actually bigger, second (stronger) HSL lead
+
+## Home tiles
+The v45 change (removing spacing/padding) was real but only bought ~13% -
+easy to not notice. This time tiles are 0.72 aspect ratio (noticeably
+taller than wide, not square) on top of the edge-to-edge width, plus
+bigger icon (48pt, was 40) and title (19pt, was 17). Should be
+unmistakable now.
+
+## HSL - second, more specific lead (in addition to the v45 session fix)
+You said Diagnostics works but HSL still doesn't start, and you didn't get
+a device log saved. Rather than guess again blind, I went back through
+GvretWifiManager (the transport HSL actually runs over) and found a second,
+more mechanistic bug that fits the symptom better than the session-state
+theory:
+
+`receivedFrameQueues` buffers CAN frames that arrive for an ID nobody's
+actively waiting on yet (added earlier so a burst of frames landing in one
+TCP read - e.g. First Frame + Consecutive Frames of a multi-frame response
+- doesn't drop anything). It's only ever cleared on connect/disconnect,
+**never between one request and the next.** So if anything is ever left
+over in the `0x7E8` queue after a conversation finishes, it just sits
+there - and whatever's next to `receive()` on 0x7E8 gets handed that
+stale leftover instead of a real answer.
+
+Diagnostics' DTC read (`19 02`) is the first thing in this app likely to
+be a genuinely multi-frame response on 0x7E8 - gauge/DID reads are almost
+always single-frame. That makes it the first realistic way to actually
+trigger this class of bug, which lines up with the timing (this started
+right after Diagnostics was added) better than the session-state theory
+does on its own.
+
+Fix: `sendRequest` and `sendHslRequest` now discard whatever's already
+queued for their own rxID before starting, so a leftover frame from
+whatever talked to the ECU right before can never be mistaken for the
+real response to a brand new request. Kept the v45 session-revert fix too
+- both are real, independent issues worth fixing regardless of which one
+(if either) is actually causing your symptom.
+
+**Still not confirmed.** If HSL still doesn't start after this, please try
+to grab the **GVRET Diagnostic Log** this time - there's already a button
+for it on the home screen (below the tiles, only shows when connected via
+WiFi/GVRET). Open it right after HSL fails and copy/share what it shows;
+it logs every CAN frame in and out, including exactly what (if anything)
+HSL received when it failed, which would settle this in one look instead
+of more guessing. That's much lower-friction than the Xcode device log I
+mentioned before - try this first.
