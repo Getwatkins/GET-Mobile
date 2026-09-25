@@ -26,7 +26,11 @@ struct HomeMenuView: View {
                         .background(GETTheme.amber)
                 }
 
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
+                // Zero spacing + no horizontal padding on the grid itself
+                // (previous version had 16pt side insets and 14pt gutters)
+                // so the tiles butt up against each other and the screen
+                // edges instead of floating in the middle with room to spare.
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 0), GridItem(.flexible(), spacing: 0)], spacing: 0) {
                     tile(title: "Gauges", systemImage: "gauge.with.dots.needle.67percent", tint: GETTheme.amber) {
                         path.append(.gauges)
                     }
@@ -47,7 +51,6 @@ struct HomeMenuView: View {
                         }
                     }
                 }
-                .padding(.horizontal)
 
                 diagnosticsLinks
 
@@ -73,20 +76,23 @@ struct HomeMenuView: View {
 
     private func tile(title: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 12) {
+            VStack(spacing: 14) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 32))
+                    .font(.system(size: 40))
                     .foregroundColor(tint)
                 Text(title)
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 17, weight: .bold))
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
             .aspectRatio(1, contentMode: .fit)
             .background(GETTheme.panelBackground)
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(tint.opacity(0.6), lineWidth: 1))
-            .cornerRadius(14)
+            // Small radius rather than the old 14pt - with the tiles now
+            // touching edge-to-edge, a big radius leaves a visible gap at
+            // every corner where two (or four) tiles meet.
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(tint.opacity(0.6), lineWidth: 1))
+            .cornerRadius(4)
         }
     }
 

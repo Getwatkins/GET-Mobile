@@ -57,3 +57,41 @@ HSL/Standard logger screens release the ECU-ownership lock only via their
 **Done** button. Leaving with the back arrow appears to leave `isHslActive`
 true, which would make Gauges > Start Live silently do nothing until Done is
 used. Diagnostics releases it in `onDisappear`, so it doesn't have this issue.
+
+---
+
+# v45 — HSL fix, bigger home tiles, bigger logo
+
+## HSL timing out again — likely cause found and fixed
+`DiagnosticsSession` (v44) switches the ECM/TCM to the **extended diagnostic
+session** (`0x10 03`) before reading/clearing codes, and never switched it
+back. That's the same session state your earlier HSL debugging specifically
+flagged as troublesome on this ECU (extended session + seed-key unlock
+producing a real NRC). HSL never touches session state itself - it assumes
+default and layers its own 0x3E service on top - so if you opened Diagnostics
+and tapped Read/Clear on the ECM, then went to HSL shortly after (inside the
+ECU's ~5s S3 timer, before it would auto-revert on its own), HSL would be
+talking to a module sitting in a session it doesn't expect. That lines up with
+"timing out like it used to."
+
+Fix: `DiagnosticsSession.read()`/`.clear()` now unconditionally send the
+module back to the default session (`0x10 01`) before releasing it, on every
+exit path including errors - not just on success.
+
+**This is my best-supported theory, not a confirmed fix** - same caveat as
+the v43 chart fix. If HSL still times out after this, it isn't the session
+issue; a device crash/connection log from the moment HSL fails to start would
+let me pin it down instead of guessing again. One thing worth telling me
+either way: did you open Diagnostics (and tap Read or Clear) before HSL
+failed, or did HSL fail on a fresh connect with Diagnostics untouched? That
+alone would confirm or rule this theory out.
+
+## Home screen tiles
+Removed the grid's spacing (14pt) and outer horizontal padding (16pt), so
+tiles now touch each other and both screen edges edge-to-edge. Bumped icon
+40pt (was 32), title 17pt (was 15), and shrank the corner radius to 4pt (was
+14pt) - a large radius on touching tiles leaves a visible notch at every
+corner where tiles meet.
+
+## Logo
+Nav bar logo height 26pt -> 34pt.

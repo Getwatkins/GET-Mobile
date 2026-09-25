@@ -69,7 +69,6 @@ final class DiagnosticsSession: ObservableObject {
         phase = .reading(module)
         infoMessage = nil
         errorMessage = nil
-        defer { phase = .idle }
 
         let client = UdsClient(transport: transport, rxID: module.rxID, txID: module.txID)
         do {
@@ -82,6 +81,11 @@ final class DiagnosticsSession: ObservableObject {
         } catch {
             errorMessage = describe(error, module: module, action: "read fault codes")
         }
+
+        // No early return above - restoreDefaultSession must run on every
+        // exit path. See its doc comment for why.
+        await restoreDefaultSession(client)
+        phase = .idle
     }
 
     // MARK: Clear
@@ -91,10 +95,13 @@ final class DiagnosticsSession: ObservableObject {
         phase = .clearing(module)
         infoMessage = nil
         errorMessage = nil
-        defer { phase = .idle }
 
         let client = UdsClient(transport: transport, rxID: module.rxID, txID: module.txID)
         var method = "UDS ClearDiagnosticInformation (0x14)"
+        // Set on any failure so the block below skips the re-read - but,
+        // same reason as read(): no early `return`s here, so
+        // restoreDefaultSession always runs even when the clear failed.
+        var clearFailed = false
 
         do {
             try await enterExtendedSession(client)
@@ -110,30 +117,35 @@ final class DiagnosticsSession: ObservableObject {
                     errorMessage = "\(module.shortName) refused the clear request. "
                         + describe(primary, module: module, action: "clear fault codes")
                         + " Fallback (OBD-II Mode 04) also failed: \(error.localizedDescription)"
-                    return
+                    clearFailed = true
                 }
             }
         } catch {
             errorMessage = describe(error, module: module, action: "clear fault codes")
-            return
+            clearFailed = true
         }
 
-        // Give the module a moment to finish, then read back what's left.
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        do {
-            let result = try await readCodes(client: client, module: module)
-            results[module] = result
-            if result.dtcs.isEmpty {
-                infoMessage = "\(module.shortName) codes cleared via \(method). Re-read shows no fault codes."
-            } else {
-                infoMessage = "Clear accepted (\(method)), but \(result.dtcs.count) code(s) are still reported. "
-                    + "Anything still failing right now is set again immediately - fix the cause, then clear again."
+        if !clearFailed {
+            // Give the module a moment to finish, then read back what's left.
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            do {
+                let result = try await readCodes(client: client, module: module)
+                results[module] = result
+                if result.dtcs.isEmpty {
+                    infoMessage = "\(module.shortName) codes cleared via \(method). Re-read shows no fault codes."
+                } else {
+                    infoMessage = "Clear accepted (\(method)), but \(result.dtcs.count) code(s) are still reported. "
+                        + "Anything still failing right now is set again immediately - fix the cause, then clear again."
+                }
+            } catch {
+                results[module] = nil
+                infoMessage = "\(module.shortName) accepted the clear request (\(method)), but the re-read to verify failed: "
+                    + "\(error.localizedDescription) Tap Read Codes to check."
             }
-        } catch {
-            results[module] = nil
-            infoMessage = "\(module.shortName) accepted the clear request (\(method)), but the re-read to verify failed: "
-                + "\(error.localizedDescription) Tap Read Codes to check."
         }
+
+        await restoreDefaultSession(client)
+        phase = .idle
     }
 
     // MARK: Report
@@ -170,6 +182,20 @@ final class DiagnosticsSession: ObservableObject {
         } catch is UdsNegativeResponseException {
             // continue in whatever session the module is already in
         }
+    }
+
+    /// Diagnostics is the only screen in the app that moves a module out of
+    /// the default session. HSL never touches session state itself - it
+    /// assumes default and talks a custom 0x3E service on top of it - and
+    /// this specific ECU has already shown session/security state causing
+    /// real problems (see the HSL debugging history: extended session +
+    /// seed-key unlock produced a negative response there too). So whatever
+    /// happened above, always hand the module back in the default session
+    /// (0x10 01) before releasing it. Best-effort: if this fails, the
+    /// module was most likely already back in default (harmless) or is
+    /// unreachable, in which case nothing after this would work either.
+    private func restoreDefaultSession(_ client: UdsClient) async {
+        try? await client.changeSession(.default)
     }
 
     private func readCodes(client: UdsClient, module: DiagModule) async throws -> ModuleResult {
