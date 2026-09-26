@@ -7,6 +7,20 @@ struct HslLogSample: Identifiable {
     let values: [String: Double]
 }
 
+enum HslError: LocalizedError {
+    case noTransport
+    case noChannels
+
+    var errorDescription: String? {
+        switch self {
+        case .noTransport:
+            return "No HSL transport is attached."
+        case .noChannels:
+            return "No HSL channels are selected."
+        }
+    }
+}
+
 @MainActor
 final class HslLoggerSession: ObservableObject {
     @Published private(set) var isRunning = false
@@ -56,6 +70,39 @@ final class HslLoggerSession: ObservableObject {
         uds = nil
         hslTransport = nil
         transport = nil
+    }
+
+    func exportCSV() throws -> URL {
+        guard !samples.isEmpty else {
+            throw HslError.noChannels
+        }
+
+        let names = selectedPids.map(\.name)
+        let header = ["Timestamp"] + names
+        let csvRows = [header.map(csvEscape).joined(separator: ",")]
+
+        let rows = samples.map { sample in
+            let values = names.map { name in
+                sample.values[name].map(String.init) ?? ""
+            }
+            let line = ([ISO8601DateFormatter().string(from: sample.timestamp)] + values).map(csvEscape).joined(separator: ",")
+            return line
+        }
+
+        let csvText = (csvRows + rows).joined(separator: "\n") + "\n"
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HSL-\(formatter.string(from: Date())).csv")
+        try csvText.write(to: fileURL, atomically: true, encoding: .utf8)
+        return fileURL
+    }
+
+    private func csvEscape(_ value: String) -> String {
+        let escapedValue = value.replacingOccurrences(of: "\"", with: "\"\"")
+        return "\"\(escapedValue)\""
     }
 
     func start() {
