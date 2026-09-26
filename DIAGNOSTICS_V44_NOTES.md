@@ -145,3 +145,32 @@ it logs every CAN frame in and out, including exactly what (if anything)
 HSL received when it failed, which would settle this in one look instead
 of more guessing. That's much lower-friction than the Xcode device log I
 mentioned before - try this first.
+
+---
+
+# v47 — tiles sized from the actual screen, gauges button change, logo +5%
+
+## Home tiles - properly big this time, and a text-clipping bug fixed
+Switched from aspect-ratio math to explicit sizing off the real screen
+dimensions: each tile is exactly half the screen's width and 30% of its
+height (so the 2x2 grid is ~60% of the screen), with `GridItem(.fixed(...))`
+columns instead of `.flexible()` so there's no rounding gap at the edges
+or between tiles.
+
+Also found and fixed why a title could look cut off: the previous version
+computed tile height FROM the aspect ratio, and `.cornerRadius()` clips to
+that computed box. "Diagnostics" (the longest title) could need more
+vertical room than that box had once it wrapped, and the overflow got
+silently sliced off by the clip. Fixed height with real headroom, plus
+`.fixedSize(vertical: true)` on the text so it always reports (and gets)
+its full needed height, means that can't happen now.
+
+## Gauges screen
+Removed the "Read Once" button. "Start Live"/"Stop Live" is now a single
+centered button (no longer stretched full-width in a two-button row) -
+just a plain button as a direct VStack child, which centers by default.
+(`GaugeSessionViewModel.readOnce()` itself is still there, just unused -
+didn't delete it in case anything else calls it later.)
+
+## Logo
+34pt -> 34 * 1.05 (~35.7pt), i.e. ~5% larger as asked.

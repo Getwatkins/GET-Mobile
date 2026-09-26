@@ -14,6 +14,19 @@ struct HomeMenuView: View {
     @State private var showGvretLog = false
     @State private var showBridgeLog = false
 
+    // Explicit, screen-derived sizing rather than aspect-ratio math: each
+    // tile is exactly half the screen wide (so, with zero grid spacing,
+    // all 4 tiles - 2 columns x 2 rows - butt up against each other and
+    // both screen edges with no gaps) and a fixed fraction of the screen
+    // tall, generous enough that content can never need more room than
+    // it's given. That last part matters: the previous aspect-ratio-based
+    // sizing computed height purely from width, and cornerRadius() clips
+    // to that box - so "Diagnostics" (the longest title) could render
+    // taller than the box once wrapped, and get its bottom sliced off.
+    // A fixed height with real headroom means that can't happen.
+    private var tileWidth: CGFloat { UIScreen.main.bounds.width / 2 }
+    private var tileHeight: CGFloat { UIScreen.main.bounds.height * 0.30 }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
@@ -26,11 +39,10 @@ struct HomeMenuView: View {
                         .background(GETTheme.amber)
                 }
 
-                // Zero spacing + no horizontal padding on the grid itself
-                // (previous version had 16pt side insets and 14pt gutters)
-                // so the tiles butt up against each other and the screen
-                // edges instead of floating in the middle with room to spare.
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 0), GridItem(.flexible(), spacing: 0)], spacing: 0) {
+                // Fixed-width columns matching tileWidth exactly (rather than
+                // .flexible()) so there's no rounding gap between the two
+                // columns or at the screen edges.
+                LazyVGrid(columns: [GridItem(.fixed(tileWidth), spacing: 0), GridItem(.fixed(tileWidth), spacing: 0)], spacing: 0) {
                     tile(title: "Gauges", systemImage: "gauge.with.dots.needle.67percent", tint: GETTheme.amber) {
                         path.append(.gauges)
                     }
@@ -78,19 +90,20 @@ struct HomeMenuView: View {
         Button(action: action) {
             VStack(spacing: 16) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 48))
+                    .font(.system(size: 56))
                     .foregroundColor(tint)
                 Text(title)
-                    .font(.system(size: 19, weight: .bold))
+                    .font(.system(size: 22, weight: .bold))
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
+                    .lineLimit(nil)
+                    // Forces the text to report (and get) its full needed
+                    // height for however many lines it wraps to, instead of
+                    // being squeezed/truncated by the layout around it.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 8)
             }
-            .frame(maxWidth: .infinity)
-            // Ratio < 1 makes each tile noticeably TALLER than it is wide
-            // (0.72 -> height is ~1.4x the width) on top of the earlier
-            // edge-to-edge width change, so the size increase is obvious
-            // rather than the ~13% from just tightening the old gutters.
-            .aspectRatio(0.72, contentMode: .fit)
+            .frame(width: tileWidth, height: tileHeight)
             .background(GETTheme.panelBackground)
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(tint.opacity(0.6), lineWidth: 1))
             .cornerRadius(4)

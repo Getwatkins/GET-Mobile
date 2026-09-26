@@ -23,20 +23,16 @@ struct GaugesOnlyView: View {
                         .background(GETTheme.amber)
                 }
 
-                HStack(spacing: 12) {
-                    Button(action: session.readOnce) {
-                        Text("Read Once").bold()
-                            .frame(maxWidth: .infinity).padding(10)
-                            .background(GETTheme.gold).foregroundColor(.black).cornerRadius(6)
-                    }
-                    Button(action: session.isLive ? session.stopLive : session.startLive) {
-                        Text(session.isLive ? "Stop Live" : "Start Live").bold()
-                            .frame(maxWidth: .infinity).padding(10)
-                            .background(session.isLive ? GETTheme.warningRed : GETTheme.amber)
-                            .foregroundColor(.black).cornerRadius(6)
-                    }
+                Button(action: session.isLive ? session.stopLive : session.startLive) {
+                    Text(session.isLive ? "Stop Live" : "Start Live").bold()
+                        .padding(.horizontal, 40)
+                        .padding(.vertical, 12)
+                        .background(session.isLive ? GETTheme.warningRed : GETTheme.amber)
+                        .foregroundColor(.black)
+                        .cornerRadius(8)
                 }
-                .padding(.horizontal)
+                // No .frame(maxWidth: .infinity) here and no wrapping HStack -
+                // a plain child is centered by the VStack's default alignment.
 
                 HStack(spacing: 8) {
                     Text("Gauge style:").foregroundColor(.gray).font(.system(size: 13))
