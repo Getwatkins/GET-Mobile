@@ -69,23 +69,34 @@ enum FlashBlockRunner {
         // aggressive for this specific board/network. Deliberately NOT
         // applied to PatchBlockRunner (the CBOOT-unlock-patch writer) - see
         // that file's own doc comment on why it's treated as higher-stakes.
-        client.setBulkTransferPacing(IsoTp.minimumFlashTransferIntervalSeconds)
-        defer { client.setBulkTransferPacing(nil) }
+        //
+        // Not a `defer` for the reset call: `await` isn't allowed inside a
+        // `defer` body (it runs synchronously at scope exit), so the reset
+        // is instead called explicitly on both the normal and error paths
+        // below - still guaranteed to run either way, just spelled out
+        // rather than automatic.
+        await client.setBulkTransferPacing(IsoTp.minimumFlashTransferIntervalSeconds)
 
         var counter: UInt8 = 1
         let transferSize = blockTransferSizes[blockNumber] ?? 0xFFD
         var baseAddress = 0
-        while baseAddress < data.count {
-            let end = min(data.count, baseAddress + transferSize)
-            let progress = Int((100.0 * Double(end) / Double(data.count) * 10).rounded() / 10)
-            statusCallback?("FLASHING", "Transferring data... ", progress)
+        do {
+            while baseAddress < data.count {
+                let end = min(data.count, baseAddress + transferSize)
+                let progress = Int((100.0 * Double(end) / Double(data.count) * 10).rounded() / 10)
+                statusCallback?("FLASHING", "Transferring data... ", progress)
 
-            let chunk = Array(data[baseAddress..<end])
-            try await client.transferData(sequenceNumber: counter, data: Data(chunk))
-            counter = UdsClient.nextTransferCounter(counter)
+                let chunk = Array(data[baseAddress..<end])
+                try await client.transferData(sequenceNumber: counter, data: Data(chunk))
+                counter = UdsClient.nextTransferCounter(counter)
 
-            baseAddress += transferSize
+                baseAddress += transferSize
+            }
+        } catch {
+            await client.setBulkTransferPacing(nil)
+            throw error
         }
+        await client.setBulkTransferPacing(nil)
 
         statusCallback?("FLASHING", "Exiting transfer... ", 100)
         logDetail?("Exiting transfer...")

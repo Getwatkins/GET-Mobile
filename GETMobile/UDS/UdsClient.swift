@@ -30,8 +30,16 @@ final class UdsClient {
 
     /// Passthrough to the underlying transport - see
     /// UdsTransport.setBulkTransferPacing's doc comment.
-    func setBulkTransferPacing(_ intervalSeconds: Double?) {
-        transport.setBulkTransferPacing(intervalSeconds)
+    ///
+    /// async because UdsTransport is @MainActor (GvretWifiManager, its only
+    /// real implementer, has to be - it's an ObservableObject driving
+    /// @Published UI state) while UdsClient itself deliberately isn't tied
+    /// to any actor, since it's used from both MainActor view models and
+    /// plain async flashing/diagnostics code. Crossing into a MainActor
+    /// protocol requirement from a nonisolated method needs an actor hop,
+    /// which only an async function can do.
+    func setBulkTransferPacing(_ intervalSeconds: Double?) async {
+        await transport.setBulkTransferPacing(intervalSeconds)
     }
 
     enum ClientError: Error, LocalizedError {

@@ -278,3 +278,38 @@ value in between) than have you guess. And keep VW_Flash on hand the way
 you already do, same as any flash. If it goes cleanly, that's real evidence
 this is safe for your setup specifically - it still isn't evidence for
 anyone else's.
+
+---
+
+# v49 — GitHub Actions build fix
+
+Your diagnosis was right, and I confirmed it against the actual code before
+touching anything: `UdsTransport` is `@MainActor` (all 4 real transports -
+GvretWifiManager, BridgeManager, and both ELM327 managers - are `@MainActor`
+classes already, for the same reason: they're `ObservableObject`s driving
+`@Published` UI state). `UdsClient` deliberately isn't tied to any actor,
+since it's used from both MainActor view models and plain async
+flashing/diagnostics code. My new `setBulkTransferPacing` passthrough on
+`UdsClient` was a plain synchronous method calling into that `@MainActor`
+protocol - exactly the violation the compiler caught.
+
+Applied your fix (made the passthrough `async`, `await` the transport
+call) - but not verbatim, because it also has a knock-on effect you didn't
+hit yet: I'd called it from inside a `defer` block in `FlashBlockRunner`
+(to guarantee the pacing override always gets reset, success or error), and
+Swift doesn't allow `await` inside `defer` - that body runs synchronously
+at scope exit and can't suspend. Using `await` there would have just traded
+this error for a new one in the same spot.
+
+I don't have a Swift toolchain in this sandbox to compile-check, so rather
+than guess whether that combination is allowed, I restructured around it:
+the transfer loop is now `do { ...transferData loop... } catch { await
+...reset...; throw error }` followed by the same reset call on the normal
+exit path. Same guarantee as the defer had - pacing always gets reset,
+success or failure - just spelled out on both paths instead of automatic.
+Grepped for every call site of `setBulkTransferPacing` afterward (5 total)
+to confirm none were missed.
+
+Nothing about the flashing logic itself, the pacing value (still 5ms,
+still scoped to just the normal block-transfer loop), or the DONE-reporting
+fix from v48 changed - this is purely the concurrency-checker fix.
