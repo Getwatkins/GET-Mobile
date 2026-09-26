@@ -19,6 +19,21 @@ protocol UdsTransport: AnyObject {
     func waitForResponse(timeoutSeconds: Double) async throws -> Data
 
     func disconnect()
+
+    /// Lets a caller doing a long bulk transfer (currently: only the
+    /// TransferData loop of a normal block flash) request a tighter
+    /// minimum gap between outgoing ISO-TP consecutive frames than the
+    /// transport's own default. Only GVRET has a software pacing floor to
+    /// begin with (see IsoTp.minimumSendIntervalSeconds's doc comment for
+    /// why it exists) - the BLE bridge and ELM327 hand frame timing off to
+    /// their own firmware/adapter and have nothing to override, so they
+    /// get the no-op default below for free. Pass nil to restore the
+    /// transport's normal default pacing.
+    func setBulkTransferPacing(_ intervalSeconds: Double?)
+}
+
+extension UdsTransport {
+    func setBulkTransferPacing(_ intervalSeconds: Double?) {}
 }
 
 /// Optional high-speed logging transport. HSL is not a normal ISO-TP response:

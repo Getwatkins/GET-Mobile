@@ -190,6 +190,19 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
 
     // MARK: UdsTransport
 
+    /// Set by setBulkTransferPacing; nil means "use IsoTp's normal default".
+    /// See that method's doc comment on the UdsTransport protocol.
+    private var bulkTransferPacingOverride: Double?
+
+    func setBulkTransferPacing(_ intervalSeconds: Double?) {
+        bulkTransferPacingOverride = intervalSeconds
+        if let intervalSeconds {
+            log("Bulk transfer pacing override active: \(Int(intervalSeconds * 1000))ms minimum between consecutive frames.")
+        } else {
+            log("Bulk transfer pacing override cleared - back to the normal \(Int(IsoTp.minimumSendIntervalSeconds * 1000))ms floor.")
+        }
+    }
+
     func sendRequest(rxID: UInt16, txID: UInt16, payload: Data, timeoutSeconds: Double = 5.0) async throws -> Data {
         guard state == .ready else { throw GvretError.notReady }
         pendingFrameRxID = UInt32(rxID)
@@ -198,7 +211,8 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         // finished request (see the doc comment on receivedFrameQueues).
         receivedFrameQueues[UInt32(rxID)] = nil
         log("UDS request: TX=0x\(String(txID, radix: 16, uppercase: true)) RX=0x\(String(rxID, radix: 16, uppercase: true)) payload=\(hexString([UInt8](payload)))")
-        try await isoTp.send([UInt8](payload), txID: UInt32(txID), timeoutSeconds: timeoutSeconds)
+        try await isoTp.send([UInt8](payload), txID: UInt32(txID), timeoutSeconds: timeoutSeconds,
+                              minimumInterval: bulkTransferPacingOverride ?? IsoTp.minimumSendIntervalSeconds)
         let response = try await isoTp.receive(rxID: UInt32(rxID), txID: UInt32(txID), timeoutSeconds: timeoutSeconds)
         log("UDS response: RX=0x\(String(rxID, radix: 16, uppercase: true)) payload=\(hexString(response))")
         return Data(response)

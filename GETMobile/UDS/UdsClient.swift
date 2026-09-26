@@ -28,6 +28,12 @@ final class UdsClient {
         self.txID = txID
     }
 
+    /// Passthrough to the underlying transport - see
+    /// UdsTransport.setBulkTransferPacing's doc comment.
+    func setBulkTransferPacing(_ intervalSeconds: Double?) {
+        transport.setBulkTransferPacing(intervalSeconds)
+    }
+
     enum ClientError: Error, LocalizedError {
         case malformedResponse(String)
 

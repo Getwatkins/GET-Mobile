@@ -38,6 +38,16 @@ enum IsoTp {
     /// requests, which is nothing against the 15s setup timeout.
     static let minimumSendIntervalSeconds: Double = 0.02
 
+    /// A faster floor available ONLY to a caller that explicitly opts in via
+    /// UdsTransport.setBulkTransferPacing (currently: just FlashBlockRunner's
+    /// TransferData loop for a normal block flash - see its call site for
+    /// the full reasoning and the honest caveats about this number).
+    /// Deliberately NOT the default: minimumSendIntervalSeconds above stays
+    /// the safe, unchanged, empirically-fixed-HSL-startup value everywhere
+    /// else, including the CBOOT-patch write path (PatchBlockRunner), which
+    /// is left alone on purpose.
+    static let minimumFlashTransferIntervalSeconds: Double = 0.005
+
     enum ParsedFrame: Equatable {
         case singleFrame(data: [UInt8])
         case firstFrame(totalLength: Int, data: [UInt8])
@@ -182,7 +192,7 @@ final class IsoTpSession {
     /// Sends `payload` on `txID`, handling flow control (waiting for FC
     /// after the First Frame, respecting block size / STmin) if it doesn't
     /// fit in one frame.
-    func send(_ payload: [UInt8], txID: UInt32, timeoutSeconds: Double) async throws {
+    func send(_ payload: [UInt8], txID: UInt32, timeoutSeconds: Double, minimumInterval: Double = IsoTp.minimumSendIntervalSeconds) async throws {
         if let single = IsoTp.buildSingleFrame(payload) {
             try await sendFrame(txID, single)
             return
@@ -202,7 +212,7 @@ final class IsoTpSession {
             if status == IsoTp.FlowStatus.wait { continue } // ECU says wait - loop back and wait for the next FC
 
             let batchSize = blockSize == 0 ? remaining.count : Int(blockSize)
-            let delay = max(IsoTp.stMinToSeconds(stMin), IsoTp.minimumSendIntervalSeconds)
+            let delay = max(IsoTp.stMinToSeconds(stMin), minimumInterval)
 
             // Block size 0 means the receiver grants the sender the entire
             // remaining message. A non-zero block size requires another FC

@@ -43,6 +43,35 @@ enum FlashBlockRunner {
         statusCallback?("FLASHING", "Transferring data... \(data.count)", 0)
         logDetail?("Transferring data... \(data.count) bytes to write")
 
+        // This is the actual bottleneck behind slow flashing over the A0's
+        // WiFi/GVRET link: GVRET paces every outgoing ISO-TP consecutive
+        // frame at a floor of 20ms regardless of what STmin the ECU actually
+        // requests, because that floor is what it took to stop the WiFi
+        // bridge's firmware from dropping frames during HSL setup (see
+        // IsoTp.minimumSendIntervalSeconds). That's negligible for HSL's
+        // small requests but dominates a flash: a single CAL block alone is
+        // ~75,000 consecutive frames, so 20ms/frame is ~25 minutes of pure
+        // pacing delay for CAL by itself, before RequestDownload/checksum/etc
+        // - vs. a J2534 dongle like OpenPort 2.0, which paces frames in its
+        // own hardware at whatever STmin the ECU actually asks for (typically
+        // 1-2ms) with no per-frame round trip at all.
+        //
+        // Tighten the floor to 5ms for exactly this loop - still 2-5x more
+        // conservative than the ECU's likely requested STmin, restored to
+        // the proven-safe default the instant the loop ends (success or
+        // error) via defer. This is NOT hardware-validated for a sustained
+        // bulk transfer the way the 20ms floor was validated for HSL - it's
+        // a reasoned estimate. If anything below throws a checksum failure
+        // or a TransferData negative response, stop and don't retry blindly;
+        // that's the protocol's own integrity checks (the UDS TransferData
+        // block-sequence counter, and the final checksum routine below)
+        // catching a real problem, most likely this pacing being too
+        // aggressive for this specific board/network. Deliberately NOT
+        // applied to PatchBlockRunner (the CBOOT-unlock-patch writer) - see
+        // that file's own doc comment on why it's treated as higher-stakes.
+        client.setBulkTransferPacing(IsoTp.minimumFlashTransferIntervalSeconds)
+        defer { client.setBulkTransferPacing(nil) }
+
         var counter: UInt8 = 1
         let transferSize = blockTransferSizes[blockNumber] ?? 0xFFD
         var baseAddress = 0

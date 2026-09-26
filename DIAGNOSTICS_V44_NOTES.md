@@ -174,3 +174,107 @@ didn't delete it in case anything else calls it later.)
 
 ## Logo
 34pt -> 34 * 1.05 (~35.7pt), i.e. ~5% larger as asked.
+
+---
+
+# v48 — why CAL flashing is slow over A0 WiFi, and the "no DONE" bug
+
+Both are real, found by reading the actual flash code + comparing to
+VW_Flash's Python line-by-line, not guesswork. Given what's at stake here,
+I want to be upfront about confidence level on each - they're different.
+
+## Bug 1: flash never shows DONE (high confidence - this is a structural
+## bug in the port, confirmed against VW_Flash's own source)
+
+`Simos18FlashOrchestrator.runFlash`'s last two calls - `ecuReset(.hardReset)`
+then an OBD "clear emissions DTCs" broadcast - were plain `try await`, so if
+EITHER threw, the whole function threw, and the UI showed "FAILED:
+<error>" and never set `isDone = true`.
+
+VW_Flash's own flash_uds.py wraps exactly these same two calls in a
+`try/finally`, and reports `DONE` in the `finally` block **regardless of
+whether they succeeded**. That's deliberate on their end, not an oversight:
+by this point, everything that actually writes and verifies firmware -
+erase, RequestDownload, the whole TransferData loop, RequestTransferExit,
+the checksum routine, the programming-dependencies check - has already
+completed. All that's left is "reboot the ECU, then best-effort clear
+DTCs." A hard reset makes the ECU briefly unreachable while it reboots, and
+this WiFi link adds real latency on top of that, so that last, non-critical
+step can easily time out - and when it did, the Swift port let that
+failure mask an otherwise fully successful flash.
+
+**This is almost certainly what happened to you.** By the time you saw the
+error, the actual write + checksum had very likely already succeeded - the
+error was in a step that doesn't touch the ECU's flash memory at all. I
+believe this is why VW_Flash was able to "fix" it afterward: there was
+nothing left to fix, the ECU was already correctly flashed, VW_Flash's own
+attempt just had nothing to fail on that step (or its client tolerates it
+the same way, per its own try/finally).
+
+Fixed to match: that same step is now wrapped so an error there is logged,
+clearly labeled as non-fatal, and DONE is still reported. Nothing about the
+actual flashing steps (erase/download/transfer/checksum/dependency-check)
+changed.
+
+## Bug 2 / the actual slowness: a 20ms-per-frame floor applied to EVERY
+## outgoing frame, not just HSL (medium-high confidence on the cause,
+## lower confidence on the specific fix number - see caveats below)
+
+`IsoTp.minimumSendIntervalSeconds = 0.02` enforces a **minimum 20ms gap
+between every outgoing ISO-TP consecutive frame**, regardless of what STmin
+the ECU actually asks for. This was added specifically to fix HSL failing
+to start over this WiFi bridge - and the code comment for it is explicit
+that the "cost" was reasoned about only for HSL's small requests ("at most
+a few hundred ms... nothing against the 15s setup timeout"). It was never
+evaluated against a bulk transfer, because at the time nothing sent one.
+
+Flashing does. A CAL block alone is ~523KB, which is **~75,000 individual
+CAN frames**. At a fixed 20ms/frame, that's **~25 minutes of pure,
+unavoidable pacing delay for CAL alone**, before RequestDownload, the
+checksum routine, or any WiFi round-trip time on top. A full 5-block flash
+is ~2.96MB - **~430,000 frames, ~2.4 hours of pacing delay alone**. Your
+laptop's OpenPort 2.0 doesn't have this problem at all: a J2534 dongle
+paces frames in its own onboard hardware at whatever STmin the ECU actually
+requests (typically 1-2ms) with no per-frame round trip - which is the
+exact same class of difference (hand-rolled software ISO-TP over a WiFi
+round-trip vs. a firmware-level ISO-TP stack) that turned out to be behind
+the original HSL problems.
+
+**The fix, and its honest limits:** the block-transfer loop in
+`FlashBlockRunner` (the normal 5-block write path - this is what CAL-only
+flashing uses) now tightens that floor to 5ms just for itself, and puts it
+back to the proven-safe 20ms the instant the loop ends, success or error.
+At 5ms that's roughly **~6 minutes of pacing delay for CAL alone instead of
+~25**, ~36 minutes instead of ~2.4 hours for a full 5-block flash.
+
+Unlike the 20ms number, **5ms is a reasoned estimate, not something proven
+safe on your actual hardware for a long sustained transfer** - I have no
+way to test that here. Reasons I think it's a reasonable, bounded risk
+rather than a blind guess:
+- It's still 2-4x more conservative than the ECU's own typical requested
+  STmin, not a full match to it.
+- The protocol already has two independent integrity checks downstream of
+  this: the UDS TransferData block-sequence counter (each chunk is
+  acknowledged and sequenced - a dropped/corrupted chunk is likely to
+  surface as a negative response, not silent corruption) and the block's
+  own checksum routine at the very end, which the ECU itself uses to
+  decide whether to accept what it received.
+- It's scoped as narrowly as I could make it: only the TransferData loop
+  of a **normal** block flash gets the faster pacing. I deliberately left
+  `PatchBlockRunner` - the code that writes the CBOOT-unlock exploit patch
+  itself - untouched at the original safe pacing; that file already flags
+  itself as the single highest-stakes path in the app, and CAL-only
+  flashing (what you asked about) never goes through it anyway.
+- It auto-reverts via `defer`, so a failure partway through can't leave
+  the faster pacing silently active for anything afterward.
+
+**What I'd suggest, given you've had a close call before:** try it on a
+CAL-only flash first - smallest, fastest to redo, and it's what you
+actually asked about. Watch the log. If you see a checksum failure or a
+TransferData negative response anywhere, stop and don't retry blindly -
+treat that as a real signal this pacing is too aggressive for your specific
+board/network, and tell me; I'd rather move it back toward 20ms (or find a
+value in between) than have you guess. And keep VW_Flash on hand the way
+you already do, same as any flash. If it goes cleanly, that's real evidence
+this is safe for your setup specifically - it still isn't evidence for
+anyone else's.

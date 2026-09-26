@@ -263,10 +263,34 @@ enum Simos18FlashOrchestrator {
 
         statusCallback?("SETUP", "Finalizing...", 100)
         logDetail?("Rebooting ECU...")
-        try await client.ecuReset(.hardReset)
 
-        logDetail?("Sending 0x4 Clear Emissions DTCs over OBD-2")
-        _ = try await transport.sendRequest(rxID: 0x7E8, txID: 0x700, payload: Data([0x04]), timeoutSeconds: 5)
+        // VW_Flash (flash_uds.py) wraps exactly these two calls - the reset
+        // and the post-reset OBD clear-DTCs - in a try/finally, and reports
+        // DONE in the finally block regardless of whether they succeeded.
+        // That's deliberate, not an oversight: everything that actually
+        // writes and verifies firmware (erase, RequestDownload, TransferData,
+        // RequestTransferExit, the checksum routine, and the programming-
+        // dependencies check above) has already completed successfully by
+        // this point. A hard reset makes the ECU briefly unreachable while
+        // it reboots, and this WiFi link adds real round-trip latency on top
+        // of that, so this last, non-critical cleanup call can easily time
+        // out - and previously, if it did, the thrown error propagated all
+        // the way up and the flash was reported as FAILED even though the
+        // ECU had already been fully and correctly reflashed. That mismatch
+        // between "the UI says failed" and "the ECU is actually fine" is
+        // exactly the kind of thing that could push someone into an
+        // unnecessary, risky recovery attempt. Match Python's behavior:
+        // never let a failure here mask an otherwise-successful flash.
+        do {
+            try await client.ecuReset(.hardReset)
+            logDetail?("Sending 0x4 Clear Emissions DTCs over OBD-2")
+            _ = try await transport.sendRequest(rxID: 0x7E8, txID: 0x700, payload: Data([0x04]), timeoutSeconds: 5)
+        } catch {
+            logDetail?("Reset/clear-DTCs step reported an error (\(error.localizedDescription)) - "
+                + "expected sometimes since the ECU is rebooting and may not answer in time. "
+                + "The actual flash write and checksum above already succeeded, so this on its "
+                + "own is NOT a flash failure.")
+        }
 
         statusCallback?("SETUP", "DONE!...", 100)
         logDetail?("Done!")
