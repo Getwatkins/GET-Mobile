@@ -40,6 +40,7 @@ enum UnlockSequence {
     private static let securityAccessRequestSeedLevel: UInt8 = 0x11 // level 17, odd = request seed
     private static let securityAccessSendKeyLevel: UInt8 = 0x12     // level 17, even = send key
 
+    @MainActor
     static func run(
         transport: UdsTransport,
         options: UnlockSequenceOptions,
@@ -115,6 +116,7 @@ enum UnlockSequence {
     /// transports has its own timeout error type rather than one shared
     /// J2534-specific exception - the intent (never abort setup over a VIN
     /// read failure) is preserved regardless.
+    @MainActor
     private static func readVinOrThrow(client: UdsClient, logDetail: ((String) -> Void)?) async throws -> String {
         do {
             let vin = try await client.readDataByIdentifierAsAscii(vinDid)
@@ -131,6 +133,7 @@ enum UnlockSequence {
     /// the "switchpatch" raw payload [0x3E, 0x10, 0x02] which some patched
     /// ASWs accept to force entry into programming session even when
     /// conditions aren't nominally met, with widened timeouts for that attempt.
+    @MainActor
     private static func enterProgrammingSession(client: UdsClient) async throws {
         do {
             try await client.changeSession(.programming)
