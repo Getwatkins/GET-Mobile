@@ -8,6 +8,7 @@ import Foundation
 /// The one behavior carried over from the original because it's easy to
 /// miss and matters for real ECUs: on NRC 0x78 ("response pending"), keep
 /// waiting instead of failing - see sendRequest(_:).
+@MainActor
 final class UdsClient {
     private let transport: UdsTransport
     private let rxID: UInt16
@@ -16,9 +17,9 @@ final class UdsClient {
     /// Normal per-request timeout, matching flash_uds.py's Client(request_timeout=5).
     var requestTimeoutSeconds: Double = 5
 
-    /// Extended timeout used while the server is sending NRC 0x78 (response
-    /// pending). UnlockSequence widens requestTimeoutSeconds to 30s after
-    /// entering the programming session anyway, which in practice covers
+    /// Extended timeout used while the server is sending NRC 0x78
+    /// (response pending). UnlockSequence widens requestTimeoutSeconds to 30s
+    /// after entering the programming session anyway, which in practice covers
     /// this too; kept as a separate, generous default regardless.
     var responsePendingTimeoutSeconds: Double = 30
 
@@ -128,7 +129,7 @@ final class UdsClient {
     @discardableResult
     func requestDownload(blockIdentifier: UInt8, blockLength: UInt32, compressionType: UInt8, encryptionType: UInt8) async throws -> Data {
         let dfiByte = ((compressionType & 0xF) << 4) | (encryptionType & 0xF)
-        let alfidByte: UInt8 = 0x41 // (memorysize_format=32 -> 4 bytes) << 4 | (address_format=8 -> 1 byte)
+        let alfidByte: UInt8 = 0x41
 
         var payload = Data()
         payload.append(dfiByte)
@@ -192,8 +193,8 @@ final class UdsClient {
     // MARK: ClearDiagnosticInformation (0x14)
 
     /// Clears stored DTCs on this module. `groupOfDtc` 0xFFFFFF means "all
-    /// groups" (ISO 14229-1), which is what a scan tool's "Clear DTCs"
-    /// does. Positive response is just the bare 0x54.
+    /// groups" (ISO 14229-1), which is what a scan tool's "Clear DTCs" does.
+    /// Positive response is just the bare 0x54.
     func clearDiagnosticInformation(groupOfDtc: UInt32 = 0xFFFFFF) async throws {
         let group = Data([
             UInt8((groupOfDtc >> 16) & 0xFF),
