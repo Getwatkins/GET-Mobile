@@ -7,20 +7,6 @@ struct HslLogSample: Identifiable {
     let values: [String: Double]
 }
 
-enum HslError: LocalizedError {
-    case noTransport
-    case noChannels
-
-    var errorDescription: String? {
-        switch self {
-        case .noTransport:
-            return "No HSL transport is attached."
-        case .noChannels:
-            return "No HSL channels are selected."
-        }
-    }
-}
-
 @MainActor
 final class HslLoggerSession: ObservableObject {
     @Published private(set) var isRunning = false
@@ -43,6 +29,18 @@ final class HslLoggerSession: ObservableObject {
     private var variables: [String: Double] = [:]
     private var rawVariables: [String: Double] = [:]
 
+    /// HSL can realistically sustain a much higher sample rate than the
+    /// Standard/DID logger (one combined request returns every channel,
+    /// vs. one request per channel there) - up to 20Hz is selectable. Every
+    /// `samples.append` is a `@Published` change that drives a full Swift
+    /// Charts re-render, which is expensive enough that doing it 10-20
+    /// times a second was, in practice, backing up the main thread faster
+    /// than it could keep up - severe enough to eventually get the app
+    /// killed as unresponsive after several seconds. Full-rate polling and
+    /// recording is still genuinely valuable for CSV accuracy, so instead
+    /// of slowing that down, only the *publish* of new samples (what makes
+    /// the chart re-render) is capped to this rate; recording continues at
+    /// whatever the poll loop actually achieves.
     private var pendingSamples: [HslLogSample] = []
     private var lastSamplesFlush = Date.distantPast
     private let samplesPublishInterval: TimeInterval = 0.1
@@ -72,41 +70,11 @@ final class HslLoggerSession: ObservableObject {
         transport = nil
     }
 
-    func exportCSV() throws -> URL {
-        guard !samples.isEmpty else {
-            throw HslError.noChannels
-        }
-
-        let names = selectedPids.map(\.name)
-        let header = ["Timestamp"] + names
-        let csvRows = [header.map(csvEscape).joined(separator: ",")]
-
-        let rows = samples.map { sample in
-            let values = names.map { name in
-                sample.values[name].map(String.init) ?? ""
-            }
-            let line = ([ISO8601DateFormatter().string(from: sample.timestamp)] + values).map(csvEscape).joined(separator: ",")
-            return line
-        }
-
-        let csvText = (csvRows + rows).joined(separator: "\n") + "\n"
-
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-
-        let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("HSL-\(formatter.string(from: Date())).csv")
-        try csvText.write(to: fileURL, atomically: true, encoding: .utf8)
-        return fileURL
-    }
-
-    private func csvEscape(_ value: String) -> String {
-        let escapedValue = value.replacingOccurrences(of: "\"", with: "\"\"")
-        return "\"\(escapedValue)\""
-    }
-
     func start() {
-        guard !isRunning, !isStarting, self.uds != nil else { return }
+        // Guard the whole startup transaction synchronously. SwiftUI can deliver
+        // two taps before the first async Task reaches configureHsl(), which
+        // otherwise starts two ISO-TP exchanges on the same GVRET connection.
+        guard !isRunning, !isStarting, let uds else { return }
         guard hslTransport != nil || transport != nil else {
             lastError = HslError.noTransport.localizedDescription
             return
@@ -121,6 +89,30 @@ final class HslLoggerSession: ObservableObject {
         task = Task { [weak self] in
             guard let self else { return }
             do {
+                // v27 switched this to the complete physical parameter file (matching
+                // SimosTools/VW_Flash's own behavior), reasoning that a shorter,
+                // selected-channels-only list had previously "produced valid ISO-TP
+                // traffic...but would not reliably complete the list/read cycle."
+                //
+                // A fresh trace on v28 shows the full 100-parameter/509-byte/72-frame
+                // request go out completely clean - correct First Frame length,
+                // correct Flow Control handling (ECU grants BS=00/STmin=02, i.e. "send
+                // it all, don't wait for another FC"), every Consecutive Frame sent -
+                // and then total silence from the ECU for the entire 15s window. Not a
+                // malformed response, not an NRC: nothing at all, as if the message
+                // never fully/correctly arrived. That's the signature of a large burst
+                // getting lost or corrupted somewhere in the WiFi -> A0 -> CAN bus (and
+                // likely a gateway module, on most VW/Audi platforms) hand-off, not a
+                // protocol-level mistake in this app - every byte on the wire matches
+                // what it should be.
+                //
+                // Sending only the currently-selected channels cuts this from 72
+                // Consecutive Frames to a handful, which directly tests that theory.
+                // This is a genuine experiment, not a confirmed permanent fix: if it
+                // still times out with total silence even at this much smaller size,
+                // that rules out burst size/reliability and points at something else
+                // (session state, security access, or the request just not reaching
+                // the ECU at all) - so revert to the full catalog rather than assume.
                 self.pids = self.selectedPids.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
                 guard !self.pids.isEmpty else { throw HslError.noChannels }
                 try await self.configureHsl()
@@ -164,5 +156,279 @@ final class HslLoggerSession: ObservableObject {
         lastError = nil
     }
 
-    // Remaining implementation is unchanged.
+    func exportCSV() throws -> URL {
+        let columns = selectedPids.map(\.name)
+        var csv = "Time,Elapsed (s)" + columns.map { ",\(csvEscape($0))" }.joined() + "\n"
+        let start = startDate ?? samples.first?.timestamp ?? Date()
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        for sample in samples {
+            let elapsed = sample.timestamp.timeIntervalSince(start)
+            var row = "\(csvEscape(formatter.string(from: sample.timestamp))),\(String(format: "%.3f", elapsed))"
+            for pid in selectedPids {
+                if let value = sample.values[pid.name] {
+                    row += ",\(String(format: "%.6f", value))"
+                } else {
+                    row += ","
+                }
+            }
+            csv += row + "\n"
+        }
+        let name = "GETMobile_HSL_\(timestampFileName(start)).csv"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        try csv.data(using: .utf8)?.write(to: url, options: .atomic)
+        logFileURL = url
+        return url
+    }
+
+    private func configureHsl() async throws {
+        // v31/v32 tried adding an extended-session request and then a
+        // security-access (seed/key) attempt before this. Reverted: the
+        // reference SimosHslLogger.cs is explicit that VW_Flash's Python
+        // never does either of those, and the security-access attempt came
+        // back with subFunctionNotSupported in extended session - which
+        // would only be resolved by requesting it from *programming*
+        // session, and the user has confirmed that's genuinely unsafe here
+        // (risk of stalling the engine or bricking the ECU) - so that path
+        // is closed regardless of whether it would technically work. Going
+        // back to matching the reference exactly: no session change, no
+        // security access, just the raw 3E02 request, since the proven
+        // working tool doesn't need either and this app shouldn't do
+        // anything riskier than what's already known to work.
+
+        // This is the SimosTools/VW_Flash HSL setup sequence:
+        // 3E 02 + memory offset B001E700 + 16-bit byte count +
+        // [length nibble][32-bit address] entries + 00 terminator.
+        //
+        // IMPORTANT: SimosTools encodes each physical parameter in exactly
+        // five bytes: one byte whose high nibble is 0 and low nibble is the
+        // parameter length, followed by the 32-bit address. It is NOT a
+        // separate 0x00 byte followed by a length byte. The previous build
+        // inserted an extra byte here, making the byte count too large and
+        // corrupting the HSL setup list.
+        var parameterList = Data()
+        for pid in pids {
+            guard pid.length >= 1 && pid.length <= 4 else { continue }
+            parameterList.append(UInt8(pid.length & 0x0F))
+            parameterList.append(UInt8((pid.address >> 24) & 0xFF))
+            parameterList.append(UInt8((pid.address >> 16) & 0xFF))
+            parameterList.append(UInt8((pid.address >> 8) & 0xFF))
+            parameterList.append(UInt8(pid.address & 0xFF))
+        }
+        parameterList.append(0x00)
+
+        let offset: UInt32 = 0xB001E700
+        let count = UInt16(parameterList.count)
+        var request = Data([0x3E, 0x02,
+                            UInt8((offset >> 24) & 0xFF), UInt8((offset >> 16) & 0xFF),
+                            UInt8((offset >> 8) & 0xFF), UInt8(offset & 0xFF),
+                            UInt8((count >> 8) & 0xFF), UInt8(count & 0xFF)])
+        request.append(parameterList)
+
+        let response = try await sendHsl(request, expectedPayloadBytes: 0, timeoutSeconds: hslSetupTimeoutSeconds)
+        guard response.first == 0x7E else {
+            throw HslError.invalidSetupResponse(hex(response))
+        }
+    }
+
+    private func pollLoop() async {
+        let interval = UInt64(max(0.02, 1.0 / max(1.0, sampleRate)) * 1_000_000_000)
+        while !Task.isCancelled {
+            let started = Date()
+            do {
+                let request = Data([0x3E, 0x04,
+                                    UInt8((0xB001E700 >> 24) & 0xFF), UInt8((0xB001E700 >> 16) & 0xFF),
+                                    UInt8((0xB001E700 >> 8) & 0xFF), UInt8(0xB001E700 & 0xFF),
+                                    0xFF, 0xFF])
+                let expectedBytes = pids.reduce(0) { $0 + $1.length }
+                let response = try await sendHsl(request, expectedPayloadBytes: expectedBytes, timeoutSeconds: hslPollTimeoutSeconds)
+                try Task.checkCancellation()
+                guard response.first == 0x7E else {
+                    throw HslError.invalidPollResponse(hex(response))
+                }
+                // The SimosTools HSL backend returns 0x7E followed directly by
+                // the configured memory payload (it does not echo 0x04 here).
+                let payload = Data(response.dropFirst())
+                if payload.isEmpty {
+                    throw HslError.invalidPollResponse(hex(response))
+                }
+                let values = try decode(payload)
+                let now = Date()
+                pendingSamples.append(HslLogSample(timestamp: now, values: values))
+                latestValues = values
+                lastError = nil
+                // Flush into the published `samples` (and therefore the
+                // chart) at most every samplesPublishInterval, not on every
+                // single poll - see the comment on these properties above.
+                if now.timeIntervalSince(lastSamplesFlush) >= samplesPublishInterval {
+                    samples.append(contentsOf: pendingSamples)
+                    pendingSamples.removeAll(keepingCapacity: true)
+                    if samples.count > 20_000 { samples.removeFirst(samples.count - 20_000) }
+                    sampleCount = samples.count
+                    lastSamplesFlush = now
+                }
+            } catch is CancellationError {
+                break
+            } catch let error as HslError {
+                lastError = error.localizedDescription
+                // A protocol-level HSL rejection is not transient. Stop rather than
+                // hammering the ECU with the same malformed/unsupported request.
+                if case .invalidPollResponse = error {
+                    isRunning = false
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                lastError = error.localizedDescription
+                // A transient transport error should not destroy a usable log. Back off briefly.
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            let elapsed = Date().timeIntervalSince(started)
+            let target = Double(interval) / 1_000_000_000.0
+            if elapsed < target {
+                try? await Task.sleep(nanoseconds: UInt64((target - elapsed) * 1_000_000_000.0))
+            }
+        }
+        // Flush anything recorded since the last publish - otherwise the
+        // final fraction-of-a-second of samples would be silently dropped
+        // from both the chart and CSV export just because the loop ended
+        // before the next scheduled flush.
+        if !pendingSamples.isEmpty {
+            samples.append(contentsOf: pendingSamples)
+            pendingSamples.removeAll(keepingCapacity: true)
+            if samples.count > 20_000 { samples.removeFirst(samples.count - 20_000) }
+            sampleCount = samples.count
+        }
+        isRunning = false
+    }
+
+    /// The one-time 3E02 setup transaction has to build a list of every
+    /// physical parameter's memory read on the ECU (100 entries in the full
+    /// catalog) before it can ack - that appears to take noticeably longer
+    /// than any single 3E04 poll. The v28 debug log showed the Flow Control
+    /// arrive fine (BS=00 "send everything", STmin=02) and the full 72-frame
+    /// request transmit cleanly with no NRC, but then dead silence on 0x7E8
+    /// for the entire wait: the ECU never answered inside the old 6s window
+    /// at all, not even late. Give the setup phase noticeably more room
+    /// than a poll needs, since a slow-but-eventually-successful ack there
+    /// is a very different failure than a wedged connection.
+    private let hslSetupTimeoutSeconds: Double = 15.0
+    /// Each 3E04 poll only reads back the already-built list - much
+    /// smaller/faster than setup - so it keeps a short timeout so a single
+    /// dropped poll doesn't stall the whole logging loop for 15s.
+    private let hslPollTimeoutSeconds: Double = 4.0
+
+    private func sendHsl(_ request: Data, expectedPayloadBytes: Int, timeoutSeconds: Double) async throws -> Data {
+        if let hslTransport {
+            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: timeoutSeconds)
+        }
+        guard let uds else { throw HslError.noTransport }
+        // Non-GVRET transports can use their normal ISO-TP implementation.
+        return try await uds.sendRawRequest(request)
+    }
+
+    private func decode(_ payload: Data) throws -> [String: Double] {
+        let bytes = [UInt8](payload)
+        var offset = 0
+        rawVariables.removeAll(keepingCapacity: true)
+        variables.removeAll(keepingCapacity: true)
+
+        for pid in pids {
+            guard offset + pid.length <= bytes.count else {
+                throw HslError.shortPollResponse(expectedAtLeast: offset + pid.length, got: bytes.count)
+            }
+            let rawBytes = Array(bytes[offset..<(offset + pid.length)])
+            offset += pid.length
+            let raw: Double
+            if pid.length == 4 {
+                var bits: UInt32 = 0
+                for (i, b) in rawBytes.enumerated() { bits |= UInt32(b) << UInt32(i * 8) }
+                raw = Double(Float(bitPattern: bits))
+            } else {
+                var value: UInt64 = 0
+                for (i, b) in rawBytes.enumerated() { value |= UInt64(b) << UInt64(i * 8) }
+                if pid.signed {
+                    let bits = pid.length * 8
+                    let sign = UInt64(1) << UInt64(bits - 1)
+                    let signedValue = (value & sign) != 0 ? Int64(value | (~UInt64(0) << UInt64(bits))) : Int64(value)
+                    raw = Double(signedValue)
+                } else {
+                    raw = Double(value)
+                }
+            }
+            rawVariables[pid.name.lowercased()] = raw
+            if let assignment = pid.assignment { variables[assignment.lowercased()] = raw }
+            do {
+                let scaled = try EquationEvaluator.evaluate(pid.equation, variables: variables.merging(["x": raw]) { _, new in new })
+                variables[pid.name.lowercased()] = scaled
+                if let assignment = pid.assignment { variables[assignment.lowercased()] = scaled }
+            } catch {
+                variables[pid.name.lowercased()] = raw
+                if let assignment = pid.assignment { variables[assignment.lowercased()] = raw }
+            }
+        }
+
+        // Resolve virtual/derived entries after the physical list is decoded.
+        var resolved = variables
+        for _ in 0..<3 {
+            for pid in allPids where pid.isVirtual {
+                if pid.equation == "hp" || pid.equation == "tq" || pid.equation == "speed_zero_sixty" || pid.equation == "speed_sixty_onethirty" || pid.equation == "dist_zero_sixty" || pid.equation == "dist_emile" || pid.equation == "dist_qmile" {
+                    continue
+                }
+                if let value = try? EquationEvaluator.evaluate(pid.equation, variables: resolved) {
+                    resolved[pid.name.lowercased()] = value
+                }
+            }
+        }
+
+        if let tq = resolved["tq_eng"] ?? resolved["tq"], let rpm = resolved["rpm"] {
+            resolved["tq"] = tq
+            resolved["hp"] = tq * rpm / 7127.0
+        }
+        for pid in allPids where pid.isVirtual {
+            if let value = resolved[pid.name.lowercased()] { variables[pid.name.lowercased()] = value }
+        }
+
+        var output: [String: Double] = [:]
+        for pid in allPids where selectedNames.contains(pid.name) {
+            if let value = variables[pid.name.lowercased()] {
+                output[pid.name] = value
+            }
+        }
+        return output
+    }
+
+    private func csvEscape(_ value: String) -> String {
+        if value.contains(",") || value.contains("\"") || value.contains("\n") {
+            return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        }
+        return value
+    }
+
+    private func timestampFileName(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        return f.string(from: date)
+    }
+
+    private func hex(_ data: Data) -> String {
+        [UInt8](data).map { String(format: "%02X", $0) }.joined(separator: " ")
+    }
+
+    enum HslError: Error, LocalizedError {
+        case invalidSetupResponse(String)
+        case invalidPollResponse(String)
+        case shortPollResponse(expectedAtLeast: Int, got: Int)
+        case noChannels
+        case noTransport
+        var errorDescription: String? {
+            switch self {
+            case .invalidSetupResponse(let value): return "HSL setup failed. ECU response: \(value)"
+            case .invalidPollResponse(let value): return "HSL read returned an unexpected response: \(value)"
+            case .shortPollResponse(let expected, let got): return "HSL response was short: expected at least \(expected) bytes, received \(got)."
+            case .noChannels: return "Select at least one HSL channel before starting the logger."
+            case .noTransport: return "HSL logging is not available on the current transport."
+            }
+        }
+    }
 }
