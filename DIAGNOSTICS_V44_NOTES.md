@@ -313,3 +313,86 @@ to confirm none were missed.
 Nothing about the flashing logic itself, the pacing value (still 5ms,
 still scoped to just the normal block-transfer loop), or the DONE-reporting
 fix from v48 changed - this is purely the concurrency-checker fix.
+
+---
+
+# v50 — flash speed confirmed, HSL "crash" traced to an unbounded transport hang
+
+## Flash speed: the 6 minutes matches the estimate
+Good confirmation - that's right in line with what the 5ms pacing math
+predicted for a CAL-only flash (~6 min vs. the old ~25 min). No changes
+this round on the speed side - see below for why I'd hold off on pushing
+it faster right now rather than tune it further blind.
+
+## The HSL "crash": traced from your log, not guessed
+Walked the log line by line. What actually happened is more specific -
+and less scary - than "crashed":
+
+- Everything up to ~1:22:49 is you testing Diagnostics (session changes,
+  a `19 02` read, a `14 FF FF FF` clear that got NRC 0x11 - "service not
+  supported" - correctly falling back to the OBD Mode 04 clear, then a
+  re-read confirming zero DTCs). All of that worked exactly as designed,
+  fallback included.
+- Then: **total silence for 2 minutes 15 seconds** - not even the routine
+  background CAN traffic (`0x17F00010`) that had been showing up every
+  ~1s the whole time before that. Then `Connection closed by remote side`,
+  then a clean auto-reconnect.
+- That silence is the tell. If HSL had been actively polling and failing,
+  we'd see repeated "HSL ISO-TP START" attempts and timeout log lines
+  throughout that gap - there are none. The code was stuck on a single
+  call that doesn't log anything until it returns.
+
+That call is `rawWrite` - the function every single outgoing byte to the
+A0 goes through (UDS requests, HSL requests, flashing's TransferData
+chunks, all of it). It had **no timeout at all**: it just calls
+`NWConnection.send(...)` and waits for its completion handler, however
+long that takes. Under normal traffic this never came up because the
+completion handler fires almost immediately. HSL's sustained ~10Hz
+polling is a very different kind of load than anything else this app
+does, and it's the most likely thing to have actually overwhelmed the
+A0's WiFi/TCP stack. Once that happened, our local write to the socket
+kept "succeeding" as far as the OS was concerned (queued locally) while
+nothing drained on the other end - so the completion handler just never
+fired, and nothing in the app could tell for over two minutes, until the
+OS's own TCP retransmission timeout finally gave up and tore the
+connection down for us.
+
+**This wasn't an app crash** - the fact that the log shows a clean
+reconnect sequence right after proves the app process was alive and
+running the whole time; it also means, encouragingly, that this had
+nothing to do with the v43 chart-rendering crash fix (different
+mechanism, different code path entirely).
+
+**Fixed:** `rawWrite` now races the real write against a 5-second timeout,
+same pattern already used for the receive side. If the A0 stops draining
+the socket, this is now detected and logged within 5 seconds instead of
+2+ minutes of silence, and it proactively tears down and reconnects the
+same way a normal disconnect does - so what used to be an unexplained
+multi-minute freeze should now show up as a quick, visible error and an
+automatic reconnect. This benefits flashing too, for the same reason -
+TransferData chunks go through the exact same `rawWrite` call, and this
+same unbounded-hang gap existed there too, just never triggered because
+flashing's traffic pattern apparently doesn't stress the A0 the same way.
+
+**What this fix does NOT do:** it doesn't stop the A0 from getting
+overwhelmed in the first place - only makes the app notice and recover
+quickly when it happens instead of hanging silently. If HSL still drops
+after this (just faster/visibly now instead of silently), that's real
+evidence the fix to reach for next is reducing HSL's load on the link
+itself - lower sample rate or fewer channels - rather than another
+transport-layer patch. Worth trying again as-is first now that a drop is
+recoverable in seconds rather than minutes.
+
+## On "can we get it faster" for flashing, given the above
+I'd hold off increasing the flash pacing further for now. The HSL
+incident is real evidence the A0's WiFi link can become unstable under
+sustained load, even if the specific mechanism (a stalled TCP write) is
+now handled much better than before. That's a reason for a *bit* more
+caution about pushing flashing's throughput higher, not less - a flash
+that hits the same kind of instability has a real (if now smaller, thanks
+to the write-timeout fix) chance of failing mid-block instead of mid-poll.
+6 clean flashes at the current pacing would be much better evidence to
+push further from than one. If you want to try a modest step anyway once
+you've got a few more successful flashes under your belt, I'd go
+incrementally (e.g. 5ms -> 3ms) rather than jumping straight toward the
+ECU's native STmin.

@@ -27,6 +27,15 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     private var pendingFrameContinuation: CheckedContinuation<[UInt8]?, Never>?
     private var pendingFrameRxID: UInt32?
     private var pendingTimeoutTask: Task<Void, Never>?
+    // Same pattern, for the send/write side - see rawWrite's doc comment.
+    private var pendingWriteContinuation: CheckedContinuation<Void, Error>?
+    private var pendingWriteTimeoutTask: Task<Void, Never>?
+    /// A local TCP write completing (the OS accepting bytes into its send
+    /// buffer) should normally take milliseconds - this is deliberately NOT
+    /// the same as the several-seconds-to-30-seconds timeouts used
+    /// elsewhere for "wait for the ECU to answer", which have to account
+    /// for real ECU processing time.
+    private static let writeTimeoutSeconds: Double = 5.0
 
     // A TCP read can contain several complete CAN frames. In particular, a
     // multi-frame ISO-TP response can deliver the First Frame and one or more
@@ -64,12 +73,13 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     )
 
     enum GvretError: Error, LocalizedError {
-        case notReady, disconnected, timeout
+        case notReady, disconnected, timeout, writeTimedOut
         var errorDescription: String? {
             switch self {
             case .notReady: return "Not connected to the Macchina A0 yet."
             case .disconnected: return "Macchina A0 disconnected."
             case .timeout: return "No response from the ECU (timed out)."
+            case .writeTimedOut: return "The Macchina A0 stopped accepting data - the connection is most likely dead."
             }
         }
     }
@@ -117,6 +127,10 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         pendingFrameContinuation?.resume(returning: nil)
         pendingFrameContinuation = nil
         pendingTimeoutTask?.cancel()
+        pendingWriteTimeoutTask?.cancel()
+        pendingWriteTimeoutTask = nil
+        pendingWriteContinuation?.resume(throwing: GvretError.disconnected)
+        pendingWriteContinuation = nil
         receivedFrameQueues.removeAll()
     }
 
@@ -366,19 +380,58 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         }
     }
 
+    /// Found while looking into the HSL disconnect (see the v50 notes): this
+    /// had NO timeout at all before. NWConnection.send's completion handler
+    /// simply doesn't fire until the OS's own TCP retransmission timeout
+    /// gives up on a dead peer - observed taking over two minutes in
+    /// practice, with the app sitting completely silent (nothing to log,
+    /// nothing to show the user, no way to recover) the entire time. HSL's
+    /// sustained high poll rate is far more likely to be the first thing to
+    /// actually overwhelm/hang the A0's WiFi stack than the occasional
+    /// single request most other traffic sends - but this same call is also
+    /// what every flashing TransferData chunk goes through, so it was a
+    /// latent risk there too. Races the real write against a bounded
+    /// timeout, same pattern as receiveCanFrame just below, so a dead link
+    /// is surfaced as a normal, recoverable error within a few seconds
+    /// instead of minutes of silence.
     private func rawWrite(_ bytes: [UInt8], label: String) async throws {
         guard let connection else { throw GvretError.notReady }
+        guard pendingWriteContinuation == nil else { throw GvretError.notReady }
 
         log("TX GVRET [\(label)]: \(hexString(bytes))")
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            connection.send(content: Data(bytes), completion: .contentProcessed { error in
+            pendingWriteContinuation = continuation
+
+            connection.send(content: Data(bytes), completion: .contentProcessed { [weak self] error in
+                guard let self, let cont = self.pendingWriteContinuation else { return }
+                self.pendingWriteContinuation = nil
+                self.pendingWriteTimeoutTask?.cancel()
+                self.pendingWriteTimeoutTask = nil
                 if let error {
-                    continuation.resume(throwing: error)
+                    cont.resume(throwing: error)
                 } else {
-                    continuation.resume()
+                    cont.resume()
                 }
             })
+
+            pendingWriteTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(Self.writeTimeoutSeconds * 1_000_000_000))
+                guard let self, !Task.isCancelled, let cont = self.pendingWriteContinuation else { return }
+                self.pendingWriteContinuation = nil
+                self.log("TX GVRET [\(label)]: TIMED OUT after \(Self.writeTimeoutSeconds)s waiting for the OS to accept this write - treating the connection as dead.")
+                cont.resume(throwing: GvretError.writeTimedOut)
+                // Tear the dead connection down now rather than leaving
+                // every subsequent call to independently hang for another
+                // writeTimeoutSeconds before finding out. This is the same
+                // cleanup setup()'s own write failures already trigger
+                // manually - failConnection() cancels the connection, which
+                // flows into stateUpdateHandler's .cancelled case and
+                // scheduleReconnectIfNeeded(), so the existing 1-second
+                // auto-reconnect takes over instead of the ~2 minutes it
+                // took the OS to notice on its own before this fix existed.
+                self.failConnection("Write timed out - connection appears dead, reconnecting.")
+            }
         }
 
         log("TX GVRET [\(label)]: TCP send accepted")
