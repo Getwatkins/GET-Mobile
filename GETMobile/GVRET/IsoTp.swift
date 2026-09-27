@@ -46,7 +46,7 @@ enum IsoTp {
     /// the safe, unchanged, empirically-fixed-HSL-startup value everywhere
     /// else, including the CBOOT-patch write path (PatchBlockRunner), which
     /// is left alone on purpose.
-    static let minimumFlashTransferIntervalSeconds: Double = 0.005
+    static let minimumFlashTransferIntervalSeconds: Double = 0.003
 
     enum ParsedFrame: Equatable {
         case singleFrame(data: [UInt8])

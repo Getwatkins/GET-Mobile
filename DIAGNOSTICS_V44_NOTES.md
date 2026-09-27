@@ -396,3 +396,68 @@ push further from than one. If you want to try a modest step anyway once
 you've got a few more successful flashes under your belt, I'd go
 incrementally (e.g. 5ms -> 3ms) rather than jumping straight toward the
 ECU's native STmin.
+
+---
+
+# v51 — CAL pacing to 3ms; held off on TCM flashing (explanation below)
+
+## CAL flash pacing: 5ms -> 3ms
+Exactly the incremental step I'd suggested. Same scope as before (only the
+normal block-transfer loop, still reverts via the do/catch, still doesn't
+touch PatchBlockRunner). Nothing else changed here.
+
+## TCM flashing: why I'm not implementing this yet
+I looked into what VW_Flash actually has for DQ250/DQ381 before writing
+any code, the same way I did for the ECM and for the DTC table - and I
+don't think I should port this one, at least not as a straight "point the
+existing flow at 0x7E1/0x7E9" job the way TCM diagnostics was. Specifics:
+
+- **The DQ250 "Driver" block isn't just data - it's code that gets
+  executed on the TCM.** Per VW_Flash's own docs: it's uploaded to
+  scratchpad RAM, and completing the checksum step JUMPS TO AND EXECUTES
+  a function pointer read out of the uploaded bytes. Their own docs note
+  "this can be trivially replaced with any custom code as desired." That
+  means a wrong byte here isn't "the flash fails cleanly" the way a
+  corrupted CAL block would be caught by the checksum routine on the
+  ECM - it's arbitrary code running on the module that controls clutch
+  actuation.
+- **The encryption is a firmware-version-specific reverse-engineered
+  cipher**, not a standard algorithm. The key material comes from a
+  binary file VW_Flash ships, and the code comment cites the exact
+  disassembly address it was pulled from in one specific DQ250 firmware
+  build (`DQ250_MQB_0D9300012L_4516`). I have no way to confirm that
+  applies to your specific TCM's software version.
+- **DQ381 uses AES with a key that's sequential bytes (00-0F / 10-1F)** -
+  it may be genuinely that weak (their docs do describe DQ250's own
+  protection as "extremely simple"), but I can't independently verify
+  that from here, and a wrong assumption in either direction is exactly
+  the kind of thing I can't afford to guess at.
+- Unlike the Simos18 ECM path - which is the single most-used, most
+  community-validated VW reverse-engineered exploit there is, and which
+  we ALSO iterated on for weeks with your real hardware and real debug
+  logs before I'd call it solid - I have zero real-world feedback loop
+  for TCM flashing. Nobody in this conversation has tested any of it
+  against a real DQ250/DQ381.
+- A bad ECM flash is expensive and inconvenient. A bad TCM flash risks
+  the mechatronic unit itself, which on most DSGs means pulling the
+  transmission - a much bigger job than anything we've been recovering
+  from so far - and if a corrupted flash "succeeds" well enough to boot
+  but not well enough to run correctly, that's a drivability/safety issue
+  on top of the cost.
+
+**What I'd be comfortable building right now:** reading the TCM's live
+software version / part number over UDS (a plain ReadDataByIdentifier,
+same mechanism gauges already use, safe because it's read-only) so you
+can confirm exactly what TCM/firmware you actually have before anyone
+commits to a real flash attempt. That's a genuinely useful, low-risk
+first step regardless of what we decide about writing to it.
+
+**What would change my mind on the write side:** real evidence this
+specific path has been used successfully on real DQ250/DQ381 units by
+other people (forum threads, GitHub issues on VW_Flash confirming
+successful flashes, that kind of thing) - not just that the code exists
+in the repo. If you've got that, or you've already done TCM flashes
+successfully with VW_Flash itself on your car, that's meaningfully
+different information than what I have access to here, and I'd want to
+hear about it before deciding this is off the table for good rather than
+just "not today."
