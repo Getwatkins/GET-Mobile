@@ -16,6 +16,7 @@ enum FlashBlockRunner {
         blockIdentifiers: [Int: UInt8],
         blockLengths: [Int: Int],
         blockTransferSizes: [Int: Int],
+        useFastPacing: Bool = true,
         statusCallback: ((_ step: String, _ status: String, _ progress: Int) -> Void)? = nil,
         logDetail: ((String) -> Void)? = nil
     ) async throws {
@@ -43,39 +44,33 @@ enum FlashBlockRunner {
         statusCallback?("FLASHING", "Transferring data... \(data.count)", 0)
         logDetail?("Transferring data... \(data.count) bytes to write")
 
-        // This is the actual bottleneck behind slow flashing over the A0's
-        // WiFi/GVRET link: GVRET paces every outgoing ISO-TP consecutive
-        // frame at a floor of 20ms regardless of what STmin the ECU actually
-        // requests, because that floor is what it took to stop the WiFi
-        // bridge's firmware from dropping frames during HSL setup (see
-        // IsoTp.minimumSendIntervalSeconds). That's negligible for HSL's
-        // small requests but dominates a flash: a single CAL block alone is
-        // ~75,000 consecutive frames, so 20ms/frame is ~25 minutes of pure
-        // pacing delay for CAL by itself, before RequestDownload/checksum/etc
-        // - vs. a J2534 dongle like OpenPort 2.0, which paces frames in its
-        // own hardware at whatever STmin the ECU actually asks for (typically
-        // 1-2ms) with no per-frame round trip at all.
-        //
-        // Tighten the floor to 5ms for exactly this loop - still 2-5x more
-        // conservative than the ECU's likely requested STmin, restored to
-        // the proven-safe default the instant the loop ends (success or
-        // error) via defer. This is NOT hardware-validated for a sustained
-        // bulk transfer the way the 20ms floor was validated for HSL - it's
-        // a reasoned estimate. If anything below throws a checksum failure
-        // or a TransferData negative response, stop and don't retry blindly;
-        // that's the protocol's own integrity checks (the UDS TransferData
-        // block-sequence counter, and the final checksum routine below)
-        // catching a real problem, most likely this pacing being too
-        // aggressive for this specific board/network. Deliberately NOT
-        // applied to PatchBlockRunner (the CBOOT-unlock-patch writer) - see
-        // that file's own doc comment on why it's treated as higher-stakes.
+        // Why this loop gets faster frame pacing than everything else: GVRET
+        // enforces a 20ms floor between outgoing ISO-TP consecutive frames
+        // regardless of the ECU's requested STmin (added to fix HSL startup
+        // over the A0's WiFi bridge - see IsoTp.minimumSendIntervalSeconds).
+        // A CAL block is ~75,000 frames, so that floor alone was ~25 minutes.
+        // This loop overrides it with IsoTp.minimumFlashTransferIntervalSeconds
+        // (currently 2ms, stepped down from 5ms -> 3ms -> 2ms only after
+        // clean real-world flashes at each step) and restores the 20ms
+        // default the moment the loop ends. The ECU's own STmin still wins
+        // when larger. NOT applied to PatchBlockRunner (CBOOT unlock patch)
+        // or to any TCM flash - see useFastPacing.
         //
         // Not a `defer` for the reset call: `await` isn't allowed inside a
         // `defer` body (it runs synchronously at scope exit), so the reset
         // is instead called explicitly on both the normal and error paths
         // below - still guaranteed to run either way, just spelled out
         // rather than automatic.
-        await client.setBulkTransferPacing(IsoTp.minimumFlashTransferIntervalSeconds)
+        // useFastPacing is true for every Simos18 (ECM) caller - unchanged
+        // behavior. The DSG/TCM path passes false: that keeps the safe 20ms
+        // default floor in effect for the whole transfer. Nothing here has
+        // been validated for TCM at the faster ECM-tuned value, and
+        // VW_Flash's own DSG_STMIN (0.9ms vs. its 0.35ms default for the
+        // ECM) shows the people who built this found DSG modules need
+        // MORE conservative frame spacing than the ECM, not less.
+        if useFastPacing {
+            await client.setBulkTransferPacing(IsoTp.minimumFlashTransferIntervalSeconds)
+        }
 
         var counter: UInt8 = 1
         let transferSize = blockTransferSizes[blockNumber] ?? 0xFFD
@@ -93,10 +88,10 @@ enum FlashBlockRunner {
                 baseAddress += transferSize
             }
         } catch {
-            await client.setBulkTransferPacing(nil)
+            if useFastPacing { await client.setBulkTransferPacing(nil) }
             throw error
         }
-        await client.setBulkTransferPacing(nil)
+        if useFastPacing { await client.setBulkTransferPacing(nil) }
 
         statusCallback?("FLASHING", "Exiting transfer... ", 100)
         logDetail?("Exiting transfer...")

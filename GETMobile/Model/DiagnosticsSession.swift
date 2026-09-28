@@ -21,7 +21,25 @@ final class DiagnosticsSession: ObservableObject {
         case idle
         case reading(DiagModule)
         case clearing(DiagModule)
+        case identifying(DiagModule)
     }
+
+    struct IdentificationEntry: Identifiable {
+        let id: UInt16
+        let label: String
+        /// nil = the module didn't answer this DID (not supported / not readable).
+        let value: String?
+    }
+
+    /// Standard UDS/VAG identification DIDs. Read-only, no session change.
+    static let identificationDids: [(did: UInt16, label: String)] = [
+        (0xF187, "Part number"),
+        (0xF189, "Software version"),
+        (0xF191, "Hardware number"),
+        (0xF190, "VIN"),
+        (0xF19E, "ODX / ASAM file ID"),
+        (0xF17C, "FAZIT ID"),
+    ]
 
     struct ModuleResult {
         let dtcs: [DiagnosticTroubleCode]
@@ -40,6 +58,7 @@ final class DiagnosticsSession: ObservableObject {
     @Published var includePending = false
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var results: [DiagModule: ModuleResult] = [:]
+    @Published private(set) var identification: [DiagModule: [IdentificationEntry]] = [:]
     @Published private(set) var infoMessage: String?
     @Published private(set) var errorMessage: String?
 
@@ -58,8 +77,54 @@ final class DiagnosticsSession: ObservableObject {
         transport = nil
         phase = .idle
         results = [:]
+        identification = [:]
         infoMessage = nil
         errorMessage = nil
+    }
+
+    // MARK: Identify
+
+    /// Reads the module's identification DIDs one at a time. Deliberately
+    /// does NOT change diagnostic session (unlike read/clear): identification
+    /// is plain ReadDataByIdentifier in whatever session the module is
+    /// already in, so there is nothing to restore afterward. Any DID the
+    /// module refuses or doesn't answer is shown as "not available" rather
+    /// than treated as an error - which DIDs a given TCM supports isn't
+    /// something I can verify from here.
+    func identify(_ module: DiagModule) async {
+        guard let transport, !isBusy else { return }
+        phase = .identifying(module)
+        infoMessage = nil
+        errorMessage = nil
+
+        let client = UdsClient(transport: transport, rxID: module.rxID, txID: module.txID)
+        var entries: [IdentificationEntry] = []
+        var answeredAny = false
+        for item in Self.identificationDids {
+            let data: Data? = try? await client.readDataByIdentifier(item.did)
+            var value: String? = nil
+            if let data {
+                value = Self.displayString(for: data)
+                answeredAny = true
+            }
+            entries.append(IdentificationEntry(id: item.did, label: item.label, value: value))
+        }
+        identification[module] = entries
+        if !answeredAny {
+            errorMessage = "\(module.shortName) didn't answer any identification request. Check ignition is on and the module is reachable."
+        }
+        phase = .idle
+    }
+
+    /// Printable ASCII when the payload looks like text (trimmed), otherwise hex.
+    private static func displayString(for data: Data) -> String {
+        let bytes = [UInt8](data)
+        let trimmed = bytes.filter { $0 != 0x00 }
+        let printable = !trimmed.isEmpty && trimmed.allSatisfy { $0 >= 0x20 && $0 < 0x7F }
+        if printable {
+            return String(decoding: trimmed, as: UTF8.self).trimmingCharacters(in: .whitespaces)
+        }
+        return bytes.map { String(format: "%02X", $0) }.joined(separator: " ")
     }
 
     // MARK: Read

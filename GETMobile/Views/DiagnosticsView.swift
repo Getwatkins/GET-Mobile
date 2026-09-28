@@ -23,7 +23,9 @@ struct DiagnosticsView: View {
                     .foregroundColor(.gray)
                     .disabled(diag.isBusy)
                 controls
+                identifyButton
                 messages
+                identificationSection
                 resultsSection
                 footer
             }
@@ -101,6 +103,53 @@ struct DiagnosticsView: View {
             .disabled(!diag.canRun)
         }
         .opacity(diag.canRun ? 1 : 0.5)
+    }
+
+    private var identifyButton: some View {
+        Button {
+            Task { await diag.identify(module) }
+        } label: {
+            Text(isIdentifying ? "Reading ID..." : "Read \(module.shortName) ID").bold()
+                .frame(maxWidth: .infinity).padding(10)
+                .background(GETTheme.panelBackground)
+                .foregroundColor(GETTheme.amber)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(GETTheme.amber, lineWidth: 1))
+                .cornerRadius(6)
+        }
+        .disabled(!diag.canRun)
+        .opacity(diag.canRun ? 1 : 0.5)
+    }
+
+    @ViewBuilder
+    private var identificationSection: some View {
+        if let entries = diag.identification[module] {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("\(module.shortName) identification")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(.white)
+                ForEach(entries) { entry in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(entry.label)
+                            .font(.system(size: 12))
+                            .foregroundColor(.gray)
+                        Spacer()
+                        Text(entry.value ?? "not available")
+                            .font(GETTheme.monoFont(13))
+                            .foregroundColor(entry.value == nil ? .gray : GETTheme.gold)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(GETTheme.panelBackground)
+            .cornerRadius(8)
+        }
+    }
+
+    private var isIdentifying: Bool {
+        if case .identifying = diag.phase { return true }
+        return false
     }
 
     private var isReading: Bool {

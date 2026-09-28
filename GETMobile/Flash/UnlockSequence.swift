@@ -6,6 +6,17 @@ struct UnlockSequenceOptions {
     let rxID: UInt16
     let txID: UInt16
 
+    /// true (ECM, unchanged): a failed VIN (0xF190) or active-session
+    /// (0xF186) read aborts before anything is written - the ECM path's
+    /// deliberate "prove the ISO-TP receive path is in sync first" guard.
+    /// false (TCM): those two reads are logged but never fatal. VW_Flash
+    /// itself doesn't read F186 at all and tolerates a failed VIN read
+    /// (read_data_or_empty), and I can't confirm a DSG answers either -
+    /// aborting a TCM flash over a read VW_Flash doesn't need would just
+    /// block the feature. Nothing has been written yet at that point, so
+    /// tolerating a failed read here can't leave the module half-flashed.
+    var strictPreflightReads: Bool = true
+
     /// Workshop code data record written to DID 0xF15A for VW's flash-tool
     /// log. Defaults to the same bytes VW_Flash uses by default
     /// (flash_uds.py's flash_blocks default argument) - a real workshop
@@ -65,7 +76,7 @@ enum UnlockSequence {
         logDetail?("Opening extended diagnostic session...")
         try await client.changeSession(.extendedDiagnostic)
 
-        let vin = try await readVinOrThrow(client: client, logDetail: logDetail)
+        let vin = try await readVin(client: client, strict: options.strictPreflightReads, logDetail: logDetail)
         statusCallback?("SETUP", "Connected to vehicle with VIN: \(vin)", 100)
         logDetail?("Extended diagnostic session connected to vehicle with VIN: \(vin)")
 
@@ -73,8 +84,13 @@ enum UnlockSequence {
         // it is also a useful proof that the ISO-TP receive path is synchronized
         // before we invoke the programming-precondition routine. Never proceed
         // into flashing if that proof is missing.
-        let activeSession = try await client.readDataByIdentifier(0xF186)
-        logDetail?("Active diagnostic session DID 0xF186: \((activeSession.map { String(format: "%02X", $0) }).joined(separator: " "))")
+        do {
+            let activeSession = try await client.readDataByIdentifier(0xF186)
+            logDetail?("Active diagnostic session DID 0xF186: \((activeSession.map { String(format: "%02X", $0) }).joined(separator: " "))")
+        } catch {
+            if options.strictPreflightReads { throw error }
+            logDetail?("Active-session DID 0xF186 not readable on this module (\(error.localizedDescription)) - continuing, VW_Flash doesn't read it either.")
+        }
 
         statusCallback?("SETUP", "Checking programming precondition", 100)
         logDetail?("Checking programming precondition, routine 0x0203...")
@@ -115,14 +131,18 @@ enum UnlockSequence {
     /// transports has its own timeout error type rather than one shared
     /// J2534-specific exception - the intent (never abort setup over a VIN
     /// read failure) is preserved regardless.
-    private static func readVinOrThrow(client: UdsClient, logDetail: ((String) -> Void)?) async throws -> String {
+    private static func readVin(client: UdsClient, strict: Bool, logDetail: ((String) -> Void)?) async throws -> String {
         do {
             let vin = try await client.readDataByIdentifierAsAscii(vinDid)
             logDetail?("VIN read succeeded: \(vin)")
             return vin
         } catch {
-            logDetail?("VIN read failed; refusing to continue to programming precondition: \(error.localizedDescription)")
-            throw error
+            if strict {
+                logDetail?("VIN read failed; refusing to continue to programming precondition: \(error.localizedDescription)")
+                throw error
+            }
+            logDetail?("VIN read failed on this module (\(error.localizedDescription)) - continuing, VW_Flash tolerates this too.")
+            return "(not reported by module)"
         }
     }
 

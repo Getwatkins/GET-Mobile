@@ -461,3 +461,81 @@ successfully with VW_Flash itself on your car, that's meaningfully
 different information than what I have access to here, and I'd want to
 hear about it before deciding this is off the table for good rather than
 just "not today."
+
+---
+
+# v52 — CAL pacing 3ms -> 2ms; TCM flashing (DQ250 + DQ381); TCM/ECM ID read
+
+## CAL flash pacing: 3ms -> 2ms
+You asked for 1-2ms. I went to 2ms, the top of that range, as one more
+incremental step rather than jumping to 1ms. The ECU's own requested STmin
+(from its Flow Control frame) still wins whenever it's larger. If a couple of
+CAL flashes at 2ms go clean, 1ms is a reasonable next step - but it's the
+step where I'd most expect the A0's per-frame handling to start mattering,
+so I'd rather you see 2ms succeed first. Worst realistic failure at a pace
+that's too fast is a mid-block error (ISO-TP timeout / TransferData NRC) that
+aborts the flash - keep your laptop + charger ready like always.
+ECM only. TCM flashing deliberately does NOT use the fast pacing (see below).
+
+## TCM flashing (new): Flash screen -> Target -> Transmission (TCM)
+Scope, chosen to match what you described:
+- DQ250: Driver (block 2) + CAL (block 4). The Driver is not optional - it's
+  the flash loader the CAL write depends on (and it executes on the TCM, per
+  VW_Flash's own docs). ASW is never written.
+- DQ381: CAL (block 3) only. Bootloader and ASW are never written.
+- Input: the same combined 1.5 MB "F"-project .bin VW_Flash uses, sliced at
+  VW_Flash's own offsets. Switching target/TCM type discards a loaded file.
+
+What was verified (no hardware in this sandbox - all of this is offline):
+- SA2 seed-key VM (reused as-is): matches the sa2_seed_key project's own test
+  vector (0x6a37f02e), and both TCM scripts run through it without hitting an
+  unknown opcode.
+- DSG substitution cipher: key table confirmed a true permutation; embedded
+  hex string byte-for-byte identical to mqb_dsg_key.bin; Swift-style wrapping
+  arithmetic identical to VW_Flash's unbounded-offset original over 50k bytes.
+- Standard CRC-32 matches zlib and the 0xCBF43926 check value; JAMCRC and the
+  DQ381 range-CRC self-consistent against Python mirrors.
+- LZSS -p (DQ250) and -e (DQ381) modes - never exercised by a real flash
+  before, since Simos uses neither - diffed against a build of VW_Flash's
+  actual reference C tool: 2,235/2,235 outputs identical across lengths that
+  cover every padding-tail case.
+- Full pipeline round trip: prepared block -> VW_Flash's own DSG decrypt / AES
+  decrypt -> reference LZSS decompressor recovers the exact original block
+  with a valid embedded checksum, for both DQ250 CAL and DQ381 CAL.
+- Every module constant (block IDs 0x30/0x51, lengths, transfer sizes, bin
+  offsets, sizes, AES key/IV, SA2 scripts) re-checked against the source.
+  RequestDownload length/DFI handling checked against flash_block().
+
+Deliberate decisions worth knowing:
+- Standard 20ms frame-pacing floor for TCM (not the fast ECM value). VW_Flash
+  itself uses a MORE conservative STmin for DSG than for the ECM (900us vs
+  350us), so nothing supports going faster here. Expect a TCM CAL flash to
+  take noticeably longer than an ECM CAL flash.
+- Preflight VIN and active-session reads are non-fatal for TCM only (VW_Flash
+  doesn't read F186 and tolerates a failed VIN read); ECM behavior unchanged.
+- TCM part number (0xF187) is READ AND LOGGED next to the file's CAL box code
+  for you to compare, but a mismatch does NOT block the flash. VW_Flash has no
+  such check and I can't verify a DSG's F187 uses the same format as the
+  string embedded in the CAL block, so a hard refusal could block valid
+  flashes. Compare them yourself before the write starts.
+- DQ381 fails closed: if the CAL's embedded checksum-range pointers make no
+  sense, the flash is refused (VW_Flash silently skips the block). DQ381 has
+  no project-ID wrong-file check in VW_Flash's tables, so that sanity check
+  plus the size warning are the only wrong-file protection there.
+- Same best-effort tail as the ECM path: a failure in the final reset /
+  clear-DTCs step is logged but never reported as a failed flash.
+- Skipped, as for the ECM: DQ381's special CRC8 "workshop code" fingerprint
+  (informational DID write; VW_Flash hardcodes half of it as "NONE").
+
+Untested on hardware - please treat the first TCM flash accordingly (charger,
+ignition on/engine off, car stationary, phone unlocked, VW_Flash laptop ready).
+The unknowns I can't close offline: whether your TCM answers the preflight
+DIDs, and any DSG-specific timing behavior on the A0's WiFi link.
+
+## TCM / ECM identification (Diagnostics -> "Read ECM/TCM ID")
+Read-only ReadDataByIdentifier of F187 (part number), F189 (software
+version), F191 (hardware number), F190 (VIN), F19E (ODX file ID), F17C
+(FAZIT). No session change. Any DID the module doesn't answer shows "not
+available" instead of an error - which ones a given DQ250/DQ381 supports is
+something I can't verify from here. Worth doing before a TCM flash: it tells
+you what hardware/firmware you actually have.

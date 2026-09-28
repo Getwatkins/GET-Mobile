@@ -46,7 +46,12 @@ enum IsoTp {
     /// the safe, unchanged, empirically-fixed-HSL-startup value everywhere
     /// else, including the CBOOT-patch write path (PatchBlockRunner), which
     /// is left alone on purpose.
-    static let minimumFlashTransferIntervalSeconds: Double = 0.003
+    ///
+    /// History: 5ms -> 3ms -> 2ms, each step only after real CAL flashes
+    /// completed cleanly at the previous value on the target hardware. The
+    /// ECU's own requested STmin (from its Flow Control frame) still wins
+    /// whenever it's larger - see IsoTpSession.send.
+    static let minimumFlashTransferIntervalSeconds: Double = 0.002
 
     enum ParsedFrame: Equatable {
         case singleFrame(data: [UInt8])

@@ -18,8 +18,21 @@ enum FlashMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum FlashTarget: String, CaseIterable, Identifiable {
+    case ecm = "Engine (ECM)"
+    case tcm = "Transmission (TCM)"
+    var id: String { rawValue }
+}
+
 @MainActor
 final class FlashSessionViewModel: ObservableObject {
+    /// Switching target/TCM type throws away any loaded file: a file
+    /// validated for one module must never carry over to another.
+    @Published var target: FlashTarget = .ecm { didSet { if oldValue != target { clearLoadedFile() } } }
+    @Published var dsgModuleType: DsgModuleType = .dq250 { didSet { if oldValue != dsgModuleType { clearLoadedFile() } } }
+    @Published private(set) var loadedTcmBytes: [UInt8]?
+    @Published private(set) var tcmFileSummary: String = ""
+
     @Published var moduleType: Simos18ModuleType = .simos18_1
     @Published var flashMode: FlashMode = .normalFlash
     @Published var shouldPatchCboot: Bool = false
@@ -38,9 +51,25 @@ final class FlashSessionViewModel: ObservableObject {
 
     private var flashTask: Task<Void, Never>?
 
+    private func clearLoadedFile() {
+        selectedFileName = nil
+        loadedBlocks = nil
+        loadedTcmBytes = nil
+        tcmFileSummary = ""
+        loadWarnings = []
+    }
+
     func loadFile(data: Data, fileName: String) {
         selectedFileName = fileName
         let bytes = [UInt8](data)
+
+        if target == .tcm {
+            let check = DsgFlashOrchestrator.checkFile(moduleType: dsgModuleType, bytes: bytes)
+            loadWarnings = check.warnings
+            loadedTcmBytes = check.ready ? bytes : nil
+            tcmFileSummary = check.summary
+            return
+        }
 
         let meta: (offsets: [Int: Int], lengths: [Int: Int], versions: [Int: (start: Int, end: Int)], project: String, expectedSize: Int)
         switch moduleType {
@@ -70,11 +99,21 @@ final class FlashSessionViewModel: ObservableObject {
     }
 
     var canStart: Bool {
-        !isRunning && loadedBlocks != nil
+        guard !isRunning else { return false }
+        return target == .tcm ? loadedTcmBytes != nil : loadedBlocks != nil
     }
 
     func startFlash(transport: UdsTransport) {
-        guard let blocks = loadedBlocks, !isRunning else { return }
+        guard !isRunning else { return }
+        let flashTarget = target
+        let tcmBytes = loadedTcmBytes
+        let tcmType = dsgModuleType
+        if flashTarget == .tcm {
+            guard tcmBytes != nil else { return }
+        } else {
+            guard loadedBlocks != nil else { return }
+        }
+        let blocks = loadedBlocks ?? [:]
 
         isRunning = true
         isDone = false
@@ -93,22 +132,29 @@ final class FlashSessionViewModel: ObservableObject {
         flashTask = Task { [weak self] in
             guard let self else { return }
             do {
-                try await Simos18FlashOrchestrator.runFlash(
-                    transport: transport,
-                    options: options,
-                    statusCallback: { [weak self] step, status, progress in
-                        Task { @MainActor in
-                            self?.currentStep = step
-                            self?.currentStatus = status
-                            self?.currentProgress = progress
-                        }
-                    },
-                    logDetail: { [weak self] message in
-                        Task { @MainActor in
-                            self?.appendLog(message)
-                        }
+                let statusCb: (String, String, Int) -> Void = { [weak self] step, status, progress in
+                    Task { @MainActor in
+                        self?.currentStep = step
+                        self?.currentStatus = status
+                        self?.currentProgress = progress
                     }
-                )
+                }
+                let logCb: (String) -> Void = { [weak self] message in
+                    Task { @MainActor in
+                        self?.appendLog(message)
+                    }
+                }
+                if flashTarget == .tcm, let tcmBytes {
+                    try await DsgFlashOrchestrator.runFlash(
+                        transport: transport,
+                        options: DsgFlashOptions(moduleType: tcmType, binFileBytes: tcmBytes),
+                        statusCallback: statusCb, logDetail: logCb)
+                } else {
+                    try await Simos18FlashOrchestrator.runFlash(
+                        transport: transport,
+                        options: options,
+                        statusCallback: statusCb, logDetail: logCb)
+                }
                 await MainActor.run {
                     self.isRunning = false
                     self.isDone = true
