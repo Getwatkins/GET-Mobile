@@ -5,43 +5,44 @@ import SwiftUI
 /// just a display preference - see HslLoggerSession/DidLoggerSession),
 /// then pushes onto the same shared nav path so back still steps out one
 /// level at a time.
+///
+/// Tiles here are deliberately identical in size/style to HomeMenuView's -
+/// same screen-derived width/height, same icon/title sizing, same corner
+/// radius - so the two screens read as one consistent tile language rather
+/// than Home being "the tile screen" and this being "the button list".
 struct LoggingMenuView: View {
     @ObservedObject var session: GaugeSessionViewModel
     let transport: UdsTransport
     @Binding var path: [HomeRoute]
 
+    private var tileWidth: CGFloat { UIScreen.main.bounds.width / 2 }
+    private var tileHeight: CGFloat { UIScreen.main.bounds.height * 0.30 }
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 14) {
+            VStack(spacing: 16) {
                 Text("LOGGING")
                     .font(.system(size: 20, weight: .heavy))
                     .foregroundColor(GETTheme.gold)
-                    .padding(.top, 16)
+                    .padding(.top, 12)
 
-                card(
-                    title: "HSL Datalogger",
-                    subtitle: "Simos HSL memory-list protocol - fast, all configured channels in one shot",
-                    systemImage: "waveform.path.ecg",
-                    tint: GETTheme.amber
-                ) {
-                    // Acquire the ownership lock BEFORE navigating, same as
-                    // before: closes the small window where another view
-                    // update could restart normal gauge polling.
-                    session.beginHslLogging()
-                    path.append(.hslDatalog)
+                LazyVGrid(columns: [GridItem(.fixed(tileWidth), spacing: 0), GridItem(.fixed(tileWidth), spacing: 0)], spacing: 0) {
+                    tile(title: "HSL Datalogger", systemImage: "waveform.path.ecg", tint: GETTheme.amber) {
+                        // Acquire the ownership lock BEFORE navigating, same as
+                        // before: closes the small window where another view
+                        // update could restart normal gauge polling.
+                        session.beginHslLogging()
+                        path.append(.hslDatalog)
+                    }
+
+                    tile(title: "Standard Logger", systemImage: "tablecells", tint: GETTheme.gold) {
+                        session.beginHslLogging()
+                        path.append(.standardDatalog)
+                    }
                 }
 
-                card(
-                    title: "Standard Logger (CSV)",
-                    subtitle: "Normal DID reads, one channel at a time - the same reliable path the gauges use",
-                    systemImage: "tablecells",
-                    tint: GETTheme.gold
-                ) {
-                    session.beginHslLogging()
-                    path.append(.standardDatalog)
-                }
+                subtitles
             }
-            .padding()
         }
         .background(GETTheme.background.ignoresSafeArea())
         .navigationTitle("Logging")
@@ -49,30 +50,44 @@ struct LoggingMenuView: View {
         .withTopLogo()
     }
 
-    private func card(title: String, subtitle: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
+    private func tile(title: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 14) {
+            VStack(spacing: 16) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 26))
+                    .font(.system(size: 56))
                     .foregroundColor(tint)
-                    .frame(width: 40)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(.white)
-                    Text(subtitle)
-                        .font(.system(size: 12))
-                        .foregroundColor(.gray)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .foregroundColor(.gray)
+                Text(title)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 8)
             }
-            .padding(16)
+            .frame(width: tileWidth, height: tileHeight)
             .background(GETTheme.panelBackground)
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(tint.opacity(0.6), lineWidth: 1))
-            .cornerRadius(10)
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(tint.opacity(0.6), lineWidth: 1))
+            .cornerRadius(4)
         }
+    }
+
+    /// The old cards carried a one-line explanation of each mechanism.
+    /// Dropped from the tiles themselves to match Home's icon+title-only
+    /// style exactly, kept here underneath instead so that information
+    /// isn't just lost.
+    private var subtitles: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "waveform.path.ecg").foregroundColor(GETTheme.amber).frame(width: 20)
+                Text("HSL Datalogger - Simos HSL memory-list protocol, fast, all configured channels in one shot.")
+            }
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "tablecells").foregroundColor(GETTheme.gold).frame(width: 20)
+                Text("Standard Logger - normal DID reads, one channel at a time, the same reliable path the gauges use.")
+            }
+        }
+        .font(.system(size: 12))
+        .foregroundColor(.gray)
+        .padding()
     }
 }

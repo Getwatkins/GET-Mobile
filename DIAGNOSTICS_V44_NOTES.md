@@ -539,3 +539,21 @@ version), F191 (hardware number), F190 (VIN), F19E (ODX file ID), F17C
 available" instead of an error - which ones a given DQ250/DQ381 supports is
 something I can't verify from here. Worth doing before a TCM flash: it tells
 you what hardware/firmware you actually have.
+
+---
+
+# v53 — CAL pacing 2ms -> 1ms; Logging screen now matches Home's tile style
+
+## CAL flash pacing: 2ms -> 1ms
+Last reasonable step down for now - this is close to typical ECU-requested
+STmin territory, so I'd treat 1ms as a floor to validate rather than a new
+baseline to keep pushing from. Same scope as every step before it (ECM
+CAL-only transfer loop; TCM untouched, still the safe 20ms default).
+
+## Logging screen tiles
+HSL Datalogger / Standard Logger are now the same size and style as the
+Home screen tiles - same screen-derived width/height (half-width, 30% of
+screen height), same icon/title sizing, same thin corner radius, laid out
+in the same edge-to-edge 2-column grid. The old cards' one-line
+descriptions weren't dropped, just moved below the tiles as small text,
+since the tiles themselves match Home's icon+title-only look exactly.

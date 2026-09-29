@@ -47,11 +47,13 @@ enum IsoTp {
     /// else, including the CBOOT-patch write path (PatchBlockRunner), which
     /// is left alone on purpose.
     ///
-    /// History: 5ms -> 3ms -> 2ms, each step only after real CAL flashes
-    /// completed cleanly at the previous value on the target hardware. The
-    /// ECU's own requested STmin (from its Flow Control frame) still wins
+    /// History: 5ms -> 3ms -> 2ms -> 1ms, each step only after real CAL
+    /// flashes completed cleanly at the previous value on the target
+    /// hardware. 1ms is close to a typical ECU-requested STmin territory -
+    /// treat this as the last reasonable step down, not a new baseline to
+    /// keep pushing from. The ECU's own requested STmin still wins
     /// whenever it's larger - see IsoTpSession.send.
-    static let minimumFlashTransferIntervalSeconds: Double = 0.002
+    static let minimumFlashTransferIntervalSeconds: Double = 0.001
 
     enum ParsedFrame: Equatable {
         case singleFrame(data: [UInt8])
