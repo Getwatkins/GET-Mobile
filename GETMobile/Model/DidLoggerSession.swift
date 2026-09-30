@@ -65,6 +65,9 @@ final class DidLoggerSession: ObservableObject {
         task?.cancel()
         task = Task { [weak self] in
             guard let self else { return }
+            // Defense in depth alongside stop()'s own cleanup - see
+            // UdsTransport.abandonPendingOperation's doc comment.
+            await self.transport?.abandonPendingOperation()
             await MainActor.run {
                 self.isRunning = true
                 self.isStarting = false
@@ -82,6 +85,10 @@ final class DidLoggerSession: ObservableObject {
         task = nil
         isRunning = false
         isStarting = false
+        // See HslLoggerSession.stop()'s doc comment - Task cancellation
+        // alone can leave a wait stuck inside the transport for up to its
+        // full timeout; this frees it immediately instead.
+        Task { await transport?.abandonPendingOperation() }
     }
 
     func clear() {

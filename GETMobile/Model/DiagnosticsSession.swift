@@ -97,6 +97,9 @@ final class DiagnosticsSession: ObservableObject {
         infoMessage = nil
         errorMessage = nil
 
+        // See the same call in read() below.
+        await transport.abandonPendingOperation()
+
         let client = UdsClient(transport: transport, rxID: module.rxID, txID: module.txID)
         var entries: [IdentificationEntry] = []
         var answeredAny = false
@@ -135,6 +138,14 @@ final class DiagnosticsSession: ObservableObject {
         infoMessage = nil
         errorMessage = nil
 
+        // Defensive, independent of whether whatever last owned the
+        // transport (HSL/Standard logger/Gauges) cleaned up correctly on
+        // its own way out - see the incident described on
+        // UdsTransport.abandonPendingOperation. A stray wait left pending
+        // here would otherwise make every request below fail instantly
+        // and silently, which is exactly what happened before this existed.
+        await transport.abandonPendingOperation()
+
         let client = UdsClient(transport: transport, rxID: module.rxID, txID: module.txID)
         do {
             try await enterExtendedSession(client)
@@ -160,6 +171,9 @@ final class DiagnosticsSession: ObservableObject {
         phase = .clearing(module)
         infoMessage = nil
         errorMessage = nil
+
+        // See the same call in read() just above.
+        await transport.abandonPendingOperation()
 
         let client = UdsClient(transport: transport, rxID: module.rxID, txID: module.txID)
         var method = "UDS ClearDiagnosticInformation (0x14)"

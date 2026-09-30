@@ -29,11 +29,20 @@ protocol UdsTransport: AnyObject {
     /// their own firmware/adapter and have nothing to override, so they
     /// get the no-op default below for free. Pass nil to restore the
     /// transport's normal default pacing.
-    func setBulkTransferPacing(_ intervalSeconds: Double?)
+    /// Immediately abandons whatever ISO-TP wait is currently in flight,
+    /// resolving it as if it had timed out, and frees the transport for a
+    /// new caller. Exists because Task cancellation does NOT interrupt a
+    /// custom continuation-based wait like this transport's - only
+    /// GvretWifiManager implements this for real (see its doc comment for
+    /// the incident that prompted it); other transports get the no-op
+    /// default and don't need it for the same reason they don't need
+    /// setBulkTransferPacing.
+    func abandonPendingOperation()
 }
 
 extension UdsTransport {
     func setBulkTransferPacing(_ intervalSeconds: Double?) {}
+    func abandonPendingOperation() {}
 }
 
 /// Optional high-speed logging transport. HSL is not a normal ISO-TP response:

@@ -42,6 +42,12 @@ final class UdsClient {
         await transport.setBulkTransferPacing(intervalSeconds)
     }
 
+    /// Passthrough to the underlying transport - see
+    /// UdsTransport.abandonPendingOperation's doc comment.
+    func abandonPendingOperation() async {
+        await transport.abandonPendingOperation()
+    }
+
     enum ClientError: Error, LocalizedError {
         case malformedResponse(String)
 

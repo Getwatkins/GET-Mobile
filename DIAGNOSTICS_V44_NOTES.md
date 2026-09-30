@@ -557,3 +557,62 @@ screen height), same icon/title sizing, same thin corner radius, laid out
 in the same edge-to-edge 2-column grid. The old cards' one-line
 descriptions weren't dropped, just moved below the tiles as small text,
 since the tiles themselves match Home's icon+title-only look exactly.
+
+---
+
+# v54 — found and fixed real cross-talk between HSL and Diagnostics
+
+Traced directly from your two logs, not guessed. Here's exactly what the
+evidence shows and what I fixed.
+
+## The bug (confirmed, fixed)
+In the second log, at 10:12:57, look closely: a "UDS request... 10 03" (a
+Diagnostics session-change) goes out, and its real ECU reply gets logged as
+**"HSL ISO-TP response" / "HSL ISO-TP COMPLETE"** - a response to a
+Diagnostics request, mislabeled as HSL's. That mislabeling is the proof: the
+same underlying frame-matching state was shared between two conversations
+that should never overlap.
+
+What actually happened: HSL sent a request and was waiting on the reply (a
+common outcome, since the ECU often answers "pending" first and takes a
+while on the real one). You left the HSL screen - its poll loop got
+cancelled, but **Swift's Task cancellation does not interrupt a wait
+already in progress** inside the transport. That wait just kept holding
+onto the one shared "waiting for a reply" slot for up to its full timeout.
+Diagnostics then started a new request on the same ID: its own attempt to
+wait hit a guard (correctly, by design) and failed instantly and silently
+- so its requests looked fine in the log (bytes went out) but were never
+actually listening for their own replies. When the ECU's real answer
+arrived, it got handed to HSL's stale, abandoned wait instead - exactly
+the mislabeled lines above.
+
+**Fixed at the source**: every screen that owns the connection for a
+stretch (HSL, Standard logger, Gauges Live) now explicitly releases that
+wait the moment it stops, instead of just cancelling its Task and hoping.
+Diagnostics also now clears it defensively before its own first request,
+as a second layer of protection that doesn't depend on every future
+caller remembering to clean up correctly.
+
+## What this does NOT explain - still open
+The *first* log's initial failures (Diagnostics' first DTC read timing out
+after 30s, then HSL's first start attempt timing out after 15s) happened
+right after connecting, before anything else had touched the transport -
+so the cross-talk bug above can't be the cause there. I checked the
+NRC 0x78 ("response pending") handling specifically, since that's the
+common thread in both failures, and it looks correctly implemented: each
+"pending" reply properly re-arms a fresh wait. Both times, the ECU sent
+exactly one "pending" and then genuinely nothing else arrived - looks like
+either the ECU took an unusually long time, or a reply got lost somewhere
+in the WiFi link. I don't have enough here to point at a specific
+mechanism the way I could for the cross-talk bug, so I'm not claiming a
+fix for this part.
+
+Two things that would help pin this down further:
+1. **Did the app actually crash** - kicked out to the home screen or a
+   crash notice - or did it just stop responding and you closed it
+   yourself? These point to different problems and I want to make sure
+   I'm not missing an actual crash bug versus a hang.
+2. **What happened after the second log's cutoff** (~10:13:50 onward)? It
+   ends mid-wait on one more HSL attempt, before showing whether that one
+   also timed out, succeeded, or something else. That's the direct
+   continuation of "HSL did not work" and I don't have it yet.

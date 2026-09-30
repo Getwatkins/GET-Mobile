@@ -125,9 +125,13 @@ final class GaugeSessionViewModel: ObservableObject {
         guard !isHslActive else { return }
         guard liveTask == nil else { return }
         isLive = true
-        liveTask = Task {
+        liveTask = Task { [weak self] in
+            // Defense in depth alongside stopLive()'s own cleanup - see
+            // UdsTransport.abandonPendingOperation's doc comment.
+            await self?.uds?.abandonPendingOperation()
             while !Task.isCancelled {
-                await pollAllSlots()
+                guard let self else { return }
+                await self.pollAllSlots()
                 try? await Task.sleep(nanoseconds: 250_000_000) // 4Hz; leaves the WiFi bridge more breathing room
             }
         }
@@ -164,6 +168,10 @@ final class GaugeSessionViewModel: ObservableObject {
         liveTask?.cancel()
         liveTask = nil
         isLive = false
+        // See HslLoggerSession.stop()'s doc comment - Task cancellation
+        // alone can leave a wait stuck inside the transport for up to its
+        // full timeout; this frees it immediately instead.
+        Task { await uds?.abandonPendingOperation() }
     }
 
     /// Fills any slot that doesn't already have a DID picked with something

@@ -88,6 +88,9 @@ final class HslLoggerSession: ObservableObject {
         task?.cancel()
         task = Task { [weak self] in
             guard let self else { return }
+            // Defense in depth alongside stop()'s own cleanup - see
+            // UdsTransport.abandonPendingOperation's doc comment.
+            await self.transport?.abandonPendingOperation()
             do {
                 // v27 switched this to the complete physical parameter file (matching
                 // SimosTools/VW_Flash's own behavior), reasoning that a shorter,
@@ -115,7 +118,19 @@ final class HslLoggerSession: ObservableObject {
                 // the ECU at all) - so revert to the full catalog rather than assume.
                 self.pids = self.selectedPids.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
                 guard !self.pids.isEmpty else { throw HslError.noChannels }
-                try await self.configureHsl()
+                do {
+                    try await self.configureHsl()
+                } catch let error as IsoTpSession.IsoTpError {
+                    // HSL startup can lose the first ECU response while the
+                    // A0/ECU is busy entering the memory-list handler. Retry
+                    // only an actual ISO-TP timeout; protocol errors and dead
+                    // TCP connections must still surface immediately.
+                    guard case .timeout = error else { throw error }
+                    await self.transport?.abandonPendingOperation()
+                    try await Task.sleep(nanoseconds: 250_000_000)
+                    try Task.checkCancellation()
+                    try await self.configureHsl()
+                }
                 await MainActor.run {
                     self.isConfigured = true
                     self.isRunning = true
@@ -144,6 +159,11 @@ final class HslLoggerSession: ObservableObject {
         task = nil
         isRunning = false
         isStarting = false
+        // Task.cancel() does NOT interrupt a wait already suspended inside
+        // the transport (see abandonPendingOperation's doc comment) - free
+        // it explicitly so the next screen that needs the connection isn't
+        // silently blocked by a stale HSL wait.
+        Task { await transport?.abandonPendingOperation() }
     }
 
     func clear() {
@@ -255,8 +275,14 @@ final class HslLoggerSession: ObservableObject {
                 let values = try decode(payload)
                 let now = Date()
                 pendingSamples.append(HslLogSample(timestamp: now, values: values))
-                latestValues = values
                 lastError = nil
+                // Keep the acquisition loop independent of SwiftUI. The ECU
+                // can be polled at 10-20 Hz, but the dashboard does not need a
+                // dictionary publication on every poll. Publishing less often
+                // prevents a busy CAN receive path from competing with charts.
+                if now.timeIntervalSince(lastSamplesFlush) >= samplesPublishInterval {
+                    latestValues = values
+                }
                 // Flush into the published `samples` (and therefore the
                 // chart) at most every samplesPublishInterval, not on every
                 // single poll - see the comment on these properties above.
@@ -312,7 +338,7 @@ final class HslLoggerSession: ObservableObject {
     /// at all, not even late. Give the setup phase noticeably more room
     /// than a poll needs, since a slow-but-eventually-successful ack there
     /// is a very different failure than a wedged connection.
-    private let hslSetupTimeoutSeconds: Double = 15.0
+    private let hslSetupTimeoutSeconds: Double = 20.0
     /// Each 3E04 poll only reads back the already-built list - much
     /// smaller/faster than setup - so it keeps a short timeout so a single
     /// dropped poll doesn't stall the whole logging loop for 15s.

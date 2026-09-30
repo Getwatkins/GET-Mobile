@@ -19,7 +19,6 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     private var port: UInt16 = GvretProtocol.tcpPort
     private var userInitiatedDisconnect = false
     private var reconnectTask: Task<Void, Never>?
-    private let parser = GvretProtocol.FrameParser()
 
     /// Frames matching whatever ID the caller is currently waiting for are
     /// delivered here; anything else observed on the bus is just dropped -
@@ -90,7 +89,6 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         userInitiatedDisconnect = false
         self.host = host
         self.port = port
-        parser.reset()
         receivedFrameQueues.removeAll()
         state = .connecting
         let conn = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port) ?? 23, using: .tcp)
@@ -200,6 +198,51 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
         debugLog.append("[\(timestamp)] \(message)")
         if debugLog.count > 500 { debugLog.removeFirst(debugLog.count - 500) }
+    }
+
+    // MARK: Cross-conversation cleanup (see abandonPendingOperation's doc comment)
+
+    /// Traced from a real device log: HSL sent its request and was waiting
+    /// on a response (a common enough outcome, since the ECU also
+    /// frequently answers 0x78 "pending" and then takes a while on the
+    /// real reply). The user left the HSL screen - its poll Task got
+    /// cancelled, but that doesn't touch a wait already suspended in
+    /// receiveCanFrame below, which only resolves via a real matching
+    /// frame or its own internal timeout, never by outer Task
+    /// cancellation. So the wait just kept holding pendingFrameContinuation
+    /// for up to its full timeout. Meanwhile Diagnostics started a new
+    /// request on the same rxID (0x7E8): its own receive attempt hit the
+    /// `guard pendingFrameContinuation == nil` below and threw instantly
+    /// (silently, since callers wrap this in try?/best-effort cleanup) -
+    /// so Diagnostics' requests looked like they'd "worked" in the log (the
+    /// TX went out) but were never actually waiting for their own replies.
+    /// Worse: when the ECU's real answer to the DIAGNOSTICS request
+    /// arrived, it matched on rxID alone and resolved HSL's stale
+    /// continuation instead - logged as an "HSL ISO-TP response" for a
+    /// frame that was actually the diagnostics session-change reply.
+    ///
+    /// The fix is at the source: every screen that owns the transport for a
+    /// stretch (HSL, Standard logger, Gauges Live) now calls this the
+    /// moment it stops, so a wait that's still outstanding gets released
+    /// immediately instead of lingering. Diagnostics also calls it
+    /// defensively before its own first request, as a second layer of
+    /// protection independent of whether every future caller remembers to
+    /// clean up after itself.
+    func abandonPendingOperation() {
+        if let cont = pendingFrameContinuation {
+            pendingFrameContinuation = nil
+            pendingTimeoutTask?.cancel()
+            pendingTimeoutTask = nil
+            log("Abandoning a pending receive wait (caller stopped) - freeing the transport for the next request.")
+            cont.resume(returning: nil)
+        }
+        if let cont = pendingWriteContinuation {
+            pendingWriteContinuation = nil
+            pendingWriteTimeoutTask?.cancel()
+            pendingWriteTimeoutTask = nil
+            log("Abandoning a pending write wait (caller stopped).")
+            cont.resume(throwing: GvretError.disconnected)
+        }
     }
 
     // MARK: UdsTransport
@@ -361,11 +404,11 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         if var queue = receivedFrameQueues[rxID], !queue.isEmpty {
             let frame = queue.removeFirst()
             receivedFrameQueues[rxID] = queue
-            log("Consumed queued CAN frame id=0x\(String(rxID, radix: 16, uppercase: true)) data=\(hexString(frame))")
+            log("Consumed queued CAN frame id=0x\(String(rxID, radix: 16, uppercase: true))")
             return frame
         }
 
-        log("Waiting up to \(timeoutSeconds)s for a CAN frame with id=0x\(String(rxID, radix: 16, uppercase: true))")
+        log("Waiting up to \(timeoutSeconds)s for CAN id=0x\(String(rxID, radix: 16, uppercase: true))")
         return await withCheckedContinuation { continuation in
             self.pendingFrameContinuation = continuation
             self.pendingTimeoutTask = Task { [weak self] in
@@ -445,34 +488,58 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     }
 
     private func startReceiving() {
-        connection?.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, isComplete, error in
-            Task { @MainActor in
+        // Keep the byte-stream parser off the MainActor. A busy CAN bus can
+        // deliver many frames per TCP read; parsing every byte and formatting
+        // every frame on the UI actor was capable of starving SwiftUI while HSL
+        // was running. The parser lives for this connection and is only touched
+        // by this receive callback chain, preserving byte order without sharing
+        // mutable parser state with the UI.
+        let parser = GvretProtocol.FrameParser()
+
+        func receiveNext() {
+            connection?.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, isComplete, error in
                 guard let self else { return }
+
                 if let data, !data.isEmpty {
-                    self.log("RX raw bytes [\(data.count)]: \(self.hexString([UInt8](data)))")
+                    var matchingFrames: [GvretProtocol.CanFrame] = []
+                    matchingFrames.reserveCapacity(4)
                     for byte in data {
-                        if let frame = self.parser.feed(byte) {
-                            self.log("RX CAN id=0x\(String(frame.id, radix: 16, uppercase: true)) data=\(self.hexString(frame.data))" +
-                                     (frame.id == self.pendingFrameRxID ? " (matches what we're waiting for)" : " (not what we're waiting for - ignored)"))
-                            self.handleIncomingFrame(frame)
+                        if let frame = parser.feed(byte), frame.id == 0x7E8 {
+                            // 0x7E8 is the Simos18 ECU response ID used by
+                            // UDS/HSL. Ignore the rest of the vehicle CAN bus
+                            // before it ever reaches the MainActor.
+                            matchingFrames.append(frame)
+                        }
+                    }
+
+                    if !matchingFrames.isEmpty {
+                        Task { @MainActor in
+                            guard self.connection != nil else { return }
+                            for frame in matchingFrames {
+                                self.handleIncomingFrame(frame)
+                            }
                         }
                     }
                 }
+
                 if error == nil, !isComplete {
-                    self.startReceiving()
-                } else if isComplete {
-                    self.log("Connection closed by remote side")
-                    self.state = .disconnected
-                    self.resumePendingReceive()
-                    self.scheduleReconnectIfNeeded()
-                } else if let error {
-                    self.log("GVRET receive error: \(error.localizedDescription)")
-                    self.state = .disconnected
-                    self.resumePendingReceive()
-                    self.scheduleReconnectIfNeeded()
+                    receiveNext()
+                } else {
+                    Task { @MainActor in
+                        if isComplete {
+                            self.log("Connection closed by remote side")
+                        } else if let error {
+                            self.log("GVRET receive error: \(error.localizedDescription)")
+                        }
+                        self.state = .disconnected
+                        self.resumePendingReceive()
+                        self.scheduleReconnectIfNeeded()
+                    }
                 }
             }
         }
+
+        receiveNext()
     }
 
     private func hexString(_ bytes: [UInt8]) -> String {
@@ -496,6 +563,5 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         }
         queue.append(frame.data)
         receivedFrameQueues[frame.id] = queue
-        log("Queued CAN frame id=0x\(String(frame.id, radix: 16, uppercase: true)) for the next ISO-TP receive step")
     }
 }
