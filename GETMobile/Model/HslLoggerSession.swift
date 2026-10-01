@@ -235,9 +235,42 @@ final class HslLoggerSession: ObservableObject {
                             UInt8((count >> 8) & 0xFF), UInt8(count & 0xFF)])
         request.append(parameterList)
 
-        let response = try await sendHsl(request, expectedPayloadBytes: 0, timeoutSeconds: hslSetupTimeoutSeconds)
-        guard response.first == 0x7E else {
-            throw HslError.invalidSetupResponse(hex(response))
+        do {
+            let response = try await sendHsl(request, expectedPayloadBytes: 0, timeoutSeconds: hslSetupTimeoutSeconds)
+            guard response.first == 0x7E else {
+                throw HslError.invalidSetupResponse(hex(response))
+            }
+            return
+        } catch {
+            // HSL setup is stateful in the ECU. If a previous HSL session
+            // configured the B001E700 read list and the app was stopped or
+            // crashed before a clean shutdown, some patched Simos builds can
+            // ignore a duplicate 3E02 setup request while leaving the existing
+            // HSL list usable. Do not hammer 3E02 repeatedly. Make one small
+            // 3E04 read attempt to distinguish "already configured" from a
+            // genuinely dead HSL path.
+            log("HSL setup did not complete (\(error.localizedDescription)); testing whether the ECU already has an active HSL configuration...")
+            do {
+                let recoveryRequest = Data([0x3E, 0x04,
+                                            UInt8((0xB001E700 >> 24) & 0xFF), UInt8((0xB001E700 >> 16) & 0xFF),
+                                            UInt8((0xB001E700 >> 8) & 0xFF), UInt8(0xB001E700 & 0xFF),
+                                            0xFF, 0xFF])
+                let expectedBytes = pids.reduce(0) { $0 + $1.length }
+                let recoveryResponse = try await sendHsl(recoveryRequest, expectedPayloadBytes: expectedBytes, timeoutSeconds: hslPollTimeoutSeconds)
+                guard recoveryResponse.first == 0x7E else {
+                    throw HslError.invalidPollResponse(hex(recoveryResponse))
+                }
+                let recoveryPayload = Data(recoveryResponse.dropFirst())
+                guard !recoveryPayload.isEmpty else {
+                    throw HslError.invalidPollResponse(hex(recoveryResponse))
+                }
+                _ = try decode(recoveryPayload)
+                log("HSL recovery read succeeded; ECU already had an active HSL configuration. Continuing without repeating setup.")
+                return
+            } catch {
+                log("HSL recovery read also failed: \(error.localizedDescription)")
+                throw error
+            }
         }
     }
 

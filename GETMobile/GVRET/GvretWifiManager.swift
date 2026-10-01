@@ -533,6 +533,13 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         if let cont = pendingFrameContinuation {
             pendingFrameContinuation = nil
             pendingTimeoutTask?.cancel()
+            // HSL uses 0x7E8 for both Flow Control and the eventual HSL
+            // response. Log the exact frame that satisfied each wait so a
+            // failed transaction can be diagnosed without flooding the log
+            // with unrelated CAN traffic.
+            if rxID == UInt32(BridgeProtocol.simos18ResponseID) {
+                log("RX HSL wait frame id=0x7E8 data=\(hexString(frame.data))")
+            }
             cont.resume(returning: frame.data)
             return
         }

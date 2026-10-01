@@ -271,7 +271,6 @@ final class IsoTpSession {
                 // to ignore here.
                 continue
             }
-
             if candidateStatus == IsoTp.FlowStatus.overflow {
                 throw IsoTpError.flowControlOverflow
             }
