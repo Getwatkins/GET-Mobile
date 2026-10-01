@@ -253,10 +253,27 @@ final class IsoTpSession {
         let (first, consecutive) = IsoTp.segmentMultiFrame(payload)
         try await sendFrame(txID, first)
 
-        guard let fcData = try await receiveFrame(timeoutSeconds) else {
-            throw IsoTpError.timeout
+        // 0x7E8 can carry unrelated ECU traffic while the engine is running.
+        // Do not treat the first queued frame as Flow Control merely because it
+        // arrived on the expected CAN ID. Wait specifically for an ISO-TP FC
+        // frame. This is important for HSL startup because a stray 0x7E8 frame
+        // could otherwise authorize the Consecutive Frames prematurely.
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        var fcData: [UInt8]? = nil
+        while true {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { throw IsoTpError.timeout }
+            guard let candidate = try await receiveFrame(remaining) else {
+                throw IsoTpError.timeout
+            }
+            if case .flowControl = IsoTp.parseFrame(candidate) {
+                fcData = candidate
+                break
+            }
+            // Ignore unrelated 0x7E8 traffic and continue waiting for the
+            // actual Flow Control for this request.
         }
-        guard case .flowControl(let status, _, let stMin) = IsoTp.parseFrame(fcData) else {
+        guard let fcData, case .flowControl(let status, _, let stMin) = IsoTp.parseFrame(fcData) else {
             throw IsoTpError.unexpectedFrame
         }
         if status == IsoTp.FlowStatus.overflow { throw IsoTpError.flowControlOverflow }

@@ -43,7 +43,8 @@ final class HslLoggerSession: ObservableObject {
     /// whatever the poll loop actually achieves.
     private var pendingSamples: [HslLogSample] = []
     private var lastSamplesFlush = Date.distantPast
-    private let samplesPublishInterval: TimeInterval = 0.1
+    private var lastLatestValuesPublish = Date.distantPast
+    private let samplesPublishInterval: TimeInterval = 0.2
     private var logFileURL: URL?
 
     var selectedPids: [HslPid] {
@@ -118,19 +119,7 @@ final class HslLoggerSession: ObservableObject {
                 // the ECU at all) - so revert to the full catalog rather than assume.
                 self.pids = self.selectedPids.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
                 guard !self.pids.isEmpty else { throw HslError.noChannels }
-                do {
-                    try await self.configureHsl()
-                } catch let error as IsoTpSession.IsoTpError {
-                    // HSL startup can lose the first ECU response while the
-                    // A0/ECU is busy entering the memory-list handler. Retry
-                    // only an actual ISO-TP timeout; protocol errors and dead
-                    // TCP connections must still surface immediately.
-                    guard case .timeout = error else { throw error }
-                    await self.transport?.abandonPendingOperation()
-                    try await Task.sleep(nanoseconds: 250_000_000)
-                    try Task.checkCancellation()
-                    try await self.configureHsl()
-                }
+                try await self.configureHsl()
                 await MainActor.run {
                     self.isConfigured = true
                     self.isRunning = true
@@ -171,6 +160,7 @@ final class HslLoggerSession: ObservableObject {
         pendingSamples.removeAll()
         lastSamplesFlush = .distantPast
         latestValues.removeAll()
+        lastLatestValuesPublish = .distantPast
         sampleCount = 0
         startDate = nil
         lastError = nil
@@ -275,14 +265,8 @@ final class HslLoggerSession: ObservableObject {
                 let values = try decode(payload)
                 let now = Date()
                 pendingSamples.append(HslLogSample(timestamp: now, values: values))
+                latestValues = values
                 lastError = nil
-                // Keep the acquisition loop independent of SwiftUI. The ECU
-                // can be polled at 10-20 Hz, but the dashboard does not need a
-                // dictionary publication on every poll. Publishing less often
-                // prevents a busy CAN receive path from competing with charts.
-                if now.timeIntervalSince(lastSamplesFlush) >= samplesPublishInterval {
-                    latestValues = values
-                }
                 // Flush into the published `samples` (and therefore the
                 // chart) at most every samplesPublishInterval, not on every
                 // single poll - see the comment on these properties above.
@@ -338,7 +322,7 @@ final class HslLoggerSession: ObservableObject {
     /// at all, not even late. Give the setup phase noticeably more room
     /// than a poll needs, since a slow-but-eventually-successful ack there
     /// is a very different failure than a wedged connection.
-    private let hslSetupTimeoutSeconds: Double = 20.0
+    private let hslSetupTimeoutSeconds: Double = 15.0
     /// Each 3E04 poll only reads back the already-built list - much
     /// smaller/faster than setup - so it keeps a short timeout so a single
     /// dropped poll doesn't stall the whole logging loop for 15s.
@@ -367,16 +351,42 @@ final class HslLoggerSession: ObservableObject {
             offset += pid.length
             let raw: Double
             if pid.length == 4 {
+                // HSL uses IEEE-754 single precision for 4-byte float PIDs.
+                // Decode the bit pattern without any trapping integer conversion.
                 var bits: UInt32 = 0
-                for (i, b) in rawBytes.enumerated() { bits |= UInt32(b) << UInt32(i * 8) }
-                raw = Double(Float(bitPattern: bits))
+                for (i, b) in rawBytes.enumerated() {
+                    bits |= UInt32(b) << UInt32(i * 8)
+                }
+                let floatValue = Float(bitPattern: bits)
+                guard floatValue.isFinite else {
+                    throw HslError.invalidNumericValue(pid: pid.name, reason: "non-finite float")
+                }
+                raw = Double(floatValue)
             } else {
                 var value: UInt64 = 0
-                for (i, b) in rawBytes.enumerated() { value |= UInt64(b) << UInt64(i * 8) }
+                for (i, b) in rawBytes.enumerated() {
+                    value |= UInt64(b) << UInt64(i * 8)
+                }
                 if pid.signed {
-                    let bits = pid.length * 8
-                    let sign = UInt64(1) << UInt64(bits - 1)
-                    let signedValue = (value & sign) != 0 ? Int64(value | (~UInt64(0) << UInt64(bits))) : Int64(value)
+                    // IMPORTANT: never use Int64(unsignedValue) after manual
+                    // sign extension. That initializer traps when the high bit
+                    // is set. Use a bit-pattern conversion instead. This is a
+                    // likely cause of the EXC_BREAKPOINT reported in
+                    // HslLoggerSession.decode() when a value crosses through a
+                    // negative signed range during an engine rev.
+                    let bitCount = pid.length * 8
+                    let signedValue: Int64
+                    if bitCount == 64 {
+                        signedValue = Int64(bitPattern: value)
+                    } else {
+                        let signBit = UInt64(1) << UInt64(bitCount - 1)
+                        if (value & signBit) != 0 {
+                            let mask = ~UInt64(0) << UInt64(bitCount)
+                            signedValue = Int64(bitPattern: value | mask)
+                        } else {
+                            signedValue = Int64(value)
+                        }
+                    }
                     raw = Double(signedValue)
                 } else {
                     raw = Double(value)
@@ -386,6 +396,9 @@ final class HslLoggerSession: ObservableObject {
             if let assignment = pid.assignment { variables[assignment.lowercased()] = raw }
             do {
                 let scaled = try EquationEvaluator.evaluate(pid.equation, variables: variables.merging(["x": raw]) { _, new in new })
+                guard scaled.isFinite else {
+                    throw HslError.invalidNumericValue(pid: pid.name, reason: "equation produced NaN/infinity")
+                }
                 variables[pid.name.lowercased()] = scaled
                 if let assignment = pid.assignment { variables[assignment.lowercased()] = scaled }
             } catch {
@@ -401,7 +414,7 @@ final class HslLoggerSession: ObservableObject {
                 if pid.equation == "hp" || pid.equation == "tq" || pid.equation == "speed_zero_sixty" || pid.equation == "speed_sixty_onethirty" || pid.equation == "dist_zero_sixty" || pid.equation == "dist_emile" || pid.equation == "dist_qmile" {
                     continue
                 }
-                if let value = try? EquationEvaluator.evaluate(pid.equation, variables: resolved) {
+                if let value = try? EquationEvaluator.evaluate(pid.equation, variables: resolved), value.isFinite {
                     resolved[pid.name.lowercased()] = value
                 }
             }
@@ -417,9 +430,12 @@ final class HslLoggerSession: ObservableObject {
 
         var output: [String: Double] = [:]
         for pid in allPids where selectedNames.contains(pid.name) {
-            if let value = variables[pid.name.lowercased()] {
+            if let value = variables[pid.name.lowercased()], value.isFinite {
                 output[pid.name] = value
             }
+        }
+        guard !output.isEmpty else {
+            throw HslError.invalidPollResponse("HSL decoder produced no valid values from \(bytes.count) bytes")
         }
         return output
     }
@@ -445,6 +461,7 @@ final class HslLoggerSession: ObservableObject {
         case invalidSetupResponse(String)
         case invalidPollResponse(String)
         case shortPollResponse(expectedAtLeast: Int, got: Int)
+        case invalidNumericValue(pid: String, reason: String)
         case noChannels
         case noTransport
         var errorDescription: String? {
@@ -452,6 +469,7 @@ final class HslLoggerSession: ObservableObject {
             case .invalidSetupResponse(let value): return "HSL setup failed. ECU response: \(value)"
             case .invalidPollResponse(let value): return "HSL read returned an unexpected response: \(value)"
             case .shortPollResponse(let expected, let got): return "HSL response was short: expected at least \(expected) bytes, received \(got)."
+            case .invalidNumericValue(let pid, let reason): return "HSL decode rejected \(pid): \(reason)."
             case .noChannels: return "Select at least one HSL channel before starting the logger."
             case .noTransport: return "HSL logging is not available on the current transport."
             }

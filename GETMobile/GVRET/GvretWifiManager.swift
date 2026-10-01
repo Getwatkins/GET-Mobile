@@ -19,6 +19,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     private var port: UInt16 = GvretProtocol.tcpPort
     private var userInitiatedDisconnect = false
     private var reconnectTask: Task<Void, Never>?
+    private let parser = GvretProtocol.FrameParser()
 
     /// Frames matching whatever ID the caller is currently waiting for are
     /// delivered here; anything else observed on the bus is just dropped -
@@ -89,6 +90,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         userInitiatedDisconnect = false
         self.host = host
         self.port = port
+        parser.reset()
         receivedFrameQueues.removeAll()
         state = .connecting
         let conn = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port) ?? 23, using: .tcp)
@@ -404,11 +406,11 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         if var queue = receivedFrameQueues[rxID], !queue.isEmpty {
             let frame = queue.removeFirst()
             receivedFrameQueues[rxID] = queue
-            log("Consumed queued CAN frame id=0x\(String(rxID, radix: 16, uppercase: true))")
+            log("Consumed queued CAN frame id=0x\(String(rxID, radix: 16, uppercase: true)) data=\(hexString(frame))")
             return frame
         }
 
-        log("Waiting up to \(timeoutSeconds)s for CAN id=0x\(String(rxID, radix: 16, uppercase: true))")
+        log("Waiting up to \(timeoutSeconds)s for a CAN frame with id=0x\(String(rxID, radix: 16, uppercase: true))")
         return await withCheckedContinuation { continuation in
             self.pendingFrameContinuation = continuation
             self.pendingTimeoutTask = Task { [weak self] in
@@ -488,58 +490,37 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     }
 
     private func startReceiving() {
-        // Keep the byte-stream parser off the MainActor. A busy CAN bus can
-        // deliver many frames per TCP read; parsing every byte and formatting
-        // every frame on the UI actor was capable of starving SwiftUI while HSL
-        // was running. The parser lives for this connection and is only touched
-        // by this receive callback chain, preserving byte order without sharing
-        // mutable parser state with the UI.
-        let parser = GvretProtocol.FrameParser()
-
-        func receiveNext() {
-            connection?.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, isComplete, error in
+        connection?.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, isComplete, error in
+            Task { @MainActor in
                 guard let self else { return }
-
                 if let data, !data.isEmpty {
-                    var matchingFrames: [GvretProtocol.CanFrame] = []
-                    matchingFrames.reserveCapacity(4)
+                    // Do NOT publish/log every raw byte or every CAN frame here.
+                    // A busy CAN bus can produce hundreds/thousands of frames per
+                    // second, and turning each one into a Swift String +
+                    // @Published mutation can starve the main actor and get iOS
+                    // to terminate the app while HSL is logging. The parser still
+                    // sees every byte; only the UI/debug-log churn is suppressed.
                     for byte in data {
-                        if let frame = parser.feed(byte), frame.id == 0x7E8 {
-                            // 0x7E8 is the Simos18 ECU response ID used by
-                            // UDS/HSL. Ignore the rest of the vehicle CAN bus
-                            // before it ever reaches the MainActor.
-                            matchingFrames.append(frame)
-                        }
-                    }
-
-                    if !matchingFrames.isEmpty {
-                        Task { @MainActor in
-                            guard self.connection != nil else { return }
-                            for frame in matchingFrames {
-                                self.handleIncomingFrame(frame)
-                            }
+                        if let frame = self.parser.feed(byte) {
+                            self.handleIncomingFrame(frame)
                         }
                     }
                 }
-
                 if error == nil, !isComplete {
-                    receiveNext()
-                } else {
-                    Task { @MainActor in
-                        if isComplete {
-                            self.log("Connection closed by remote side")
-                        } else if let error {
-                            self.log("GVRET receive error: \(error.localizedDescription)")
-                        }
-                        self.state = .disconnected
-                        self.resumePendingReceive()
-                        self.scheduleReconnectIfNeeded()
-                    }
+                    self.startReceiving()
+                } else if isComplete {
+                    self.log("Connection closed by remote side")
+                    self.state = .disconnected
+                    self.resumePendingReceive()
+                    self.scheduleReconnectIfNeeded()
+                } else if let error {
+                    self.log("GVRET receive error: \(error.localizedDescription)")
+                    self.state = .disconnected
+                    self.resumePendingReceive()
+                    self.scheduleReconnectIfNeeded()
                 }
             }
         }
-
-        receiveNext()
     }
 
     private func hexString(_ bytes: [UInt8]) -> String {
