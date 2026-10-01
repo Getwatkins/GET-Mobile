@@ -249,7 +249,7 @@ final class HslLoggerSession: ObservableObject {
             // HSL list usable. Do not hammer 3E02 repeatedly. Make one small
             // 3E04 read attempt to distinguish "already configured" from a
             // genuinely dead HSL path.
-            log("HSL setup did not complete (\(error.localizedDescription)); testing whether the ECU already has an active HSL configuration...")
+            print("HSL setup did not complete (\(error.localizedDescription)); testing whether the ECU already has an active HSL configuration...")
             do {
                 let recoveryRequest = Data([0x3E, 0x04,
                                             UInt8((0xB001E700 >> 24) & 0xFF), UInt8((0xB001E700 >> 16) & 0xFF),
@@ -265,10 +265,10 @@ final class HslLoggerSession: ObservableObject {
                     throw HslError.invalidPollResponse(hex(recoveryResponse))
                 }
                 _ = try decode(recoveryPayload)
-                log("HSL recovery read succeeded; ECU already had an active HSL configuration. Continuing without repeating setup.")
+                print("HSL recovery read succeeded; ECU already had an active HSL configuration. Continuing without repeating setup.")
                 return
             } catch {
-                log("HSL recovery read also failed: \(error.localizedDescription)")
+                print("HSL recovery read also failed: \(error.localizedDescription)")
                 throw error
             }
         }
