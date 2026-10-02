@@ -376,11 +376,14 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
 
     enum GvretHslError: Error, LocalizedError {
         case requestBusy
+        case transportNotExclusive
         case unexpectedAck(String)
         var errorDescription: String? {
             switch self {
             case .requestBusy:
                 return "HSL request already in progress; waiting for the existing ISO-TP transaction to finish."
+            case .transportNotExclusive:
+                return "HSL transport is not exclusively owned."
             case .unexpectedAck(let value): return "HSL ECU did not return the expected 0x7E acknowledgement: \(value)"
             }
         }
@@ -490,14 +493,16 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
             pendingWriteContinuation = continuation
 
             connection.send(content: Data(bytes), completion: .contentProcessed { [weak self] error in
-                guard let self, let cont = self.pendingWriteContinuation else { return }
-                self.pendingWriteContinuation = nil
-                self.pendingWriteTimeoutTask?.cancel()
-                self.pendingWriteTimeoutTask = nil
-                if let error {
-                    cont.resume(throwing: error)
-                } else {
-                    cont.resume()
+                Task { @MainActor in
+                    guard let self, let cont = self.pendingWriteContinuation else { return }
+                    self.pendingWriteContinuation = nil
+                    self.pendingWriteTimeoutTask?.cancel()
+                    self.pendingWriteTimeoutTask = nil
+                    if let error {
+                        cont.resume(throwing: error)
+                    } else {
+                        cont.resume()
+                    }
                 }
             })
 

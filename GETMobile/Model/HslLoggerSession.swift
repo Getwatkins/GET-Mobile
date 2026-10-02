@@ -511,6 +511,8 @@ final class HslLoggerSession: ObservableObject {
             case .invalidNumericValue(let pid, let reason): return "HSL decode rejected \(pid): \(reason)."
             case .noChannels: return "Select at least one HSL channel before starting the logger."
             case .noTransport: return "HSL logging is not available on the current transport."
+            case .transportNotExclusive:
+                return "HSL transport is not exclusively owned."
             }
         }
     }
