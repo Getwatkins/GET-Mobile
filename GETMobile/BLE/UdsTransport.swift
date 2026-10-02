@@ -38,11 +38,21 @@ protocol UdsTransport: AnyObject {
     /// default and don't need it for the same reason they don't need
     /// setBulkTransferPacing.
     func abandonPendingOperation()
+
+    /// Gives HSL exclusive ownership of the shared ECU CAN transaction path.
+    /// GVRET implements this because HSL and normal UDS/gauge traffic share
+    /// 0x7E0/0x7E8. Other transports get a no-op default.
+    func beginHslExclusive() async
+
+    /// Releases the HSL transaction lock so normal UDS/gauge traffic can resume.
+    func endHslExclusive()
 }
 
 extension UdsTransport {
     func setBulkTransferPacing(_ intervalSeconds: Double?) {}
     func abandonPendingOperation() {}
+    func beginHslExclusive() async {}
+    func endHslExclusive() {}
 }
 
 /// Optional high-speed logging transport. HSL is not a normal ISO-TP response:

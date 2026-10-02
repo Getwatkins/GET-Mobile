@@ -67,19 +67,27 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     /// never interleave its First/Consecutive Frames with the first transaction.
     private var hslRequestInFlight = false
 
+    /// HSL and normal UDS/gauge traffic share the same 0x7E0/0x7E8 CAN
+    /// conversation. While HSL owns the ISO-TP transaction, normal UDS
+    /// requests must be refused rather than competing for the receive queue.
+    /// This mirrors the effective transaction ownership provided by a
+    /// J2534/OpenPort ISO15765 channel.
+    private var hslExclusive = false
+
     private lazy var isoTp = IsoTpSession(
         sendFrame: { [weak self] id, data in try await self?.sendCanFrame(id: id, data: data) },
         receiveFrame: { [weak self] timeout in try await self?.receiveCanFrame(matching: self?.pendingFrameRxID ?? 0, timeoutSeconds: timeout) }
     )
 
     enum GvretError: Error, LocalizedError {
-        case notReady, disconnected, timeout, writeTimedOut
+        case notReady, disconnected, timeout, writeTimedOut, hslExclusive
         var errorDescription: String? {
             switch self {
             case .notReady: return "Not connected to the Macchina A0 yet."
             case .disconnected: return "Macchina A0 disconnected."
             case .timeout: return "No response from the ECU (timed out)."
             case .writeTimedOut: return "The Macchina A0 stopped accepting data - the connection is most likely dead."
+            case .hslExclusive: return "HSL logging currently owns the ECU connection."
             }
         }
     }
@@ -132,6 +140,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         pendingWriteContinuation?.resume(throwing: GvretError.disconnected)
         pendingWriteContinuation = nil
         receivedFrameQueues.removeAll()
+        hslExclusive = false
     }
 
     private func setup() async {
@@ -247,6 +256,27 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         }
     }
 
+    // MARK: HSL transport ownership
+
+    /// Claims the A0/GVRET transaction path for HSL. Set the lock BEFORE
+    /// abandoning any outstanding receive so a cancelled gauge request cannot
+    /// immediately start another request in the hand-off window.
+    func beginHslExclusive() async {
+        guard !hslExclusive else { return }
+        hslExclusive = true
+        log("HSL TRANSPORT LOCK ACQUIRED - normal UDS/gauge requests blocked")
+        // Task cancellation alone does not interrupt receiveCanFrame's
+        // continuation. Release any existing gauge/diagnostic wait now.
+        abandonPendingOperation()
+    }
+
+    func endHslExclusive() {
+        if hslExclusive {
+            hslExclusive = false
+            log("HSL TRANSPORT LOCK RELEASED - normal UDS/gauge requests may resume")
+        }
+    }
+
     // MARK: UdsTransport
 
     /// Set by setBulkTransferPacing; nil means "use IsoTp's normal default".
@@ -263,6 +293,9 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     }
 
     func sendRequest(rxID: UInt16, txID: UInt16, payload: Data, timeoutSeconds: Double = 5.0) async throws -> Data {
+        guard !hslExclusive else {
+            throw GvretError.hslExclusive
+        }
         guard state == .ready else { throw GvretError.notReady }
         pendingFrameRxID = UInt32(rxID)
         pendingFrameTxID = UInt32(txID)
@@ -290,6 +323,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     /// existing IsoTpSession for both transmit and receive. This also allows
     /// HSL samples larger than one CAN frame to be received correctly.
     func sendHslRequest(_ payload: Data, expectedPayloadBytes: Int, timeoutSeconds: Double = 6.0) async throws -> Data {
+        guard hslExclusive else { throw GvretHslError.transportNotExclusive }
         guard state == .ready else { throw GvretError.notReady }
         guard !hslRequestInFlight else { throw GvretHslError.requestBusy }
         hslRequestInFlight = true
@@ -367,6 +401,12 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
 
     private func sendCanFrame(id: UInt32, data: [UInt8]) async throws {
         guard connection != nil else { throw GvretError.notReady }
+        // Once HSL claims the transport, a normal UDS/gauge ISO-TP operation
+        // that was already between frames must not emit another CAN frame.
+        // HSL itself sets hslRequestInFlight before using this primitive.
+        if hslExclusive && !hslRequestInFlight {
+            throw GvretError.hslExclusive
+        }
         log("TX CAN id=0x\(String(id, radix: 16, uppercase: true)) data=\(hexString(data))")
         let frame = GvretProtocol.CanFrame(id: id, extended: false, bus: 0, data: data)
         let bytes = GvretProtocol.buildCanFrameCommand(frame)

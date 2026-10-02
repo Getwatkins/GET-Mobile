@@ -89,9 +89,10 @@ final class HslLoggerSession: ObservableObject {
         task?.cancel()
         task = Task { [weak self] in
             guard let self else { return }
-            // Defense in depth alongside stop()'s own cleanup - see
-            // UdsTransport.abandonPendingOperation's doc comment.
-            await self.transport?.abandonPendingOperation()
+            // HSL must own the shared 0x7E0/0x7E8 transaction path for the
+            // entire setup + polling session. GVRET uses a real exclusive
+            // lock; other transports receive the protocol default no-op.
+            await self.transport?.beginHslExclusive()
             do {
                 // v27 switched this to the complete physical parameter file (matching
                 // SimosTools/VW_Flash's own behavior), reasoning that a shorter,
@@ -140,6 +141,7 @@ final class HslLoggerSession: ObservableObject {
                     self.isStarting = false
                 }
             }
+            await self.transport?.endHslExclusive()
         }
     }
 
@@ -152,7 +154,10 @@ final class HslLoggerSession: ObservableObject {
         // the transport (see abandonPendingOperation's doc comment) - free
         // it explicitly so the next screen that needs the connection isn't
         // silently blocked by a stale HSL wait.
-        Task { await transport?.abandonPendingOperation() }
+        Task {
+            await transport?.abandonPendingOperation()
+            transport?.endHslExclusive()
+        }
     }
 
     func clear() {
@@ -497,6 +502,7 @@ final class HslLoggerSession: ObservableObject {
         case invalidNumericValue(pid: String, reason: String)
         case noChannels
         case noTransport
+        case transportNotExclusive
         var errorDescription: String? {
             switch self {
             case .invalidSetupResponse(let value): return "HSL setup failed. ECU response: \(value)"
