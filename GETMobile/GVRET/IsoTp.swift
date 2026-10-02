@@ -251,50 +251,71 @@ final class IsoTpSession {
         let (first, consecutive) = IsoTp.segmentMultiFrame(payload)
         try await sendFrame(txID, first)
 
-        // State 1: WAIT_FOR_FLOW_CONTROL. Keep reading until we receive a
-        // genuine ISO-TP FC. Unrelated 0x7E8 traffic is deliberately ignored.
+        // ISO-TP state machine: FF -> FC -> CF block(s).  The ECU is the
+        // receiver here, so its BS/STmin values are authoritative.  In the
+        // working J2534/OpenPort implementation the ISO15765 driver handles
+        // this automatically.  The A0 path must do the same explicitly.
+        //
+        // In particular, GET Mobile previously saw the ECU's real
+        // `30 00 02` FC but treated BS=2 as informational and sent ALL CFs.
+        // That violates ISO-TP when BS is non-zero: after two CFs the sender
+        // must stop and wait for the next FC.  Some Simos18 HSL patches accept
+        // the first block and then silently discard the remainder, which is
+        // exactly the symptom we were seeing (valid FC, all TX writes
+        // accepted by TCP, but no final 0x7E response).
+        var remaining = consecutive[...]
         let deadline = Date().addingTimeInterval(timeoutSeconds)
-        var status: UInt8 = IsoTp.FlowStatus.wait
-        var stMinSeconds = IsoTp.minimumSendIntervalSeconds
+        var waitFrameCount = 0
+        let maxWaitFrames = 16
 
-        while status == IsoTp.FlowStatus.wait {
-            let remaining = deadline.timeIntervalSinceNow
-            guard remaining > 0 else { throw IsoTpError.timeout }
-            guard let candidate = try await receiveFrame(remaining) else {
+        while !remaining.isEmpty {
+            let waitRemaining = deadline.timeIntervalSinceNow
+            guard waitRemaining > 0 else { throw IsoTpError.timeout }
+            guard let fcData = try await receiveFrame(waitRemaining) else {
                 throw IsoTpError.timeout
             }
 
-            guard case .flowControl(let candidateStatus, let blockSize, let rawStMin) = IsoTp.parseFrame(candidate) else {
-                // Not FC: leave it for the HSL response phase only if it is a
-                // real response frame; otherwise it is unrelated bus traffic.
-                // The receive primitive is ID-filtered, so this is still safe
-                // to ignore here.
+            guard case .flowControl(let status, let blockSize, let rawStMin) = IsoTp.parseFrame(fcData) else {
+                // 0x7E8 can carry ordinary UDS traffic.  Ignore anything that
+                // is not an ISO-TP FC while we are explicitly waiting for FC.
                 continue
             }
-            if candidateStatus == IsoTp.FlowStatus.overflow {
+
+            switch status {
+            case IsoTp.FlowStatus.continueToSend:
+                waitFrameCount = 0
+
+                let delay = max(IsoTp.stMinToSeconds(rawStMin), IsoTp.minimumSendIntervalSeconds)
+                let allowed = blockSize == 0 ? remaining.count : min(Int(blockSize), remaining.count)
+
+                for _ in 0..<allowed {
+                    try Task.checkCancellation()
+                    if delay > 0 {
+                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000.0))
+                    }
+                    try await sendFrame(txID, remaining.first!)
+                    remaining = remaining.dropFirst()
+                }
+
+                // BS=0 explicitly grants the entire remaining transfer.  For
+                // BS>0, loop back and wait for the ECU's next FC before the
+                // next block.  This is the critical behavior the previous
+                // HSL-specific sender was missing.
+
+            case IsoTp.FlowStatus.wait:
+                waitFrameCount += 1
+                if waitFrameCount > maxWaitFrames {
+                    throw IsoTpError.timeout
+                }
+                // FC(WT) does not authorize any CFs.  Keep waiting within the
+                // original transaction deadline for a CTS/OVFLW frame.
+
+            case IsoTp.FlowStatus.overflow:
                 throw IsoTpError.flowControlOverflow
+
+            default:
+                throw IsoTpError.unexpectedFrame
             }
-
-            status = candidateStatus
-            stMinSeconds = max(IsoTp.stMinToSeconds(rawStMin), IsoTp.minimumSendIntervalSeconds)
-
-            if status == IsoTp.FlowStatus.continueToSend {
-                // BS=0 means the ECU grants the entire remaining request.
-                // Non-zero BS is retained only for diagnostics; this HSL
-                // endpoint has historically used 0 or advertised a small BS
-                // without sending a second FC, so do not deadlock waiting for
-                // one after the first CTS.
-                _ = blockSize
-            }
-        }
-
-        // State 2: SEND_CONSECUTIVE_FRAMES. Never send the first CF until the
-        // validated CTS above has arrived. Pace every TCP->A0 write at the
-        // conservative bridge-safe floor.
-        for frame in consecutive {
-            try Task.checkCancellation()
-            try await Task.sleep(nanoseconds: UInt64(stMinSeconds * 1_000_000_000))
-            try await sendFrame(txID, frame)
         }
     }
 

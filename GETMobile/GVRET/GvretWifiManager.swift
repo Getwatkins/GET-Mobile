@@ -303,11 +303,12 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         log("HSL ISO-TP START: TX=0x7E0 RX=0x7E8 payloadBytes=\(payload.count) expectedResponseBytes=\(expectedPayloadBytes)")
         log("HSL ISO-TP payload: \(hexString([UInt8](payload)))")
 
-        // HSL is intentionally isolated from the normal UDS ISO-TP sender.
-        // The patched HSL backend can advertise BS=2 (30 00 02) but then expects
-        // the complete request to continue without another FC. Honoring that BS
-        // literally makes the logger stop after the first two CFs and report a
-        // timeout. Normal UDS traffic still uses the standards-compliant sender.
+        // HSL is intentionally isolated from the normal UDS ISO-TP sender,
+        // but it now uses the same standards-compliant block-size behavior.
+        // The ECU has been observed to return 30 00 02, so the A0 transport
+        // must send two CFs and then wait for the next FC rather than blasting
+        // the entire request. A J2534/OpenPort channel handles this inside its
+        // ISO15765 driver; raw A0/GVRET CAN requires us to do it here.
         log("HSL ISO-TP: transmitting request and waiting for ECU Flow Control...")
         try await isoTp.sendHsl([UInt8](payload), txID: UInt32(BridgeProtocol.simos18RequestID), timeoutSeconds: timeoutSeconds)
         log("HSL ISO-TP: request transmission complete; waiting for ECU response...")
