@@ -243,6 +243,9 @@ final class IsoTpSession {
     /// 30 ms floor for HSL. Waiting longer than the ECU-requested STmin is
     /// permitted by ISO-TP and materially reduces dropped CFs on this bridge.
     func sendHsl(_ payload: [UInt8], txID: UInt32, timeoutSeconds: Double) async throws {
+        // V63 HSL ENGINE MARKER.
+        // If this line does not appear in the phone debug log, the installed
+        // IPA was not built from the corrected HSL sender.
         if let single = IsoTp.buildSingleFrame(payload) {
             try await sendFrame(txID, single)
             return
@@ -251,50 +254,43 @@ final class IsoTpSession {
         let (first, consecutive) = IsoTp.segmentMultiFrame(payload)
         try await sendFrame(txID, first)
 
-        // Raw GVRET/A0 transport must implement the ISO-TP sender state
-        // machine itself. GET Flasher uses J2534 ISO15765, whose driver
-        // performs this automatically.
-        //
-        // The ECU commonly answers with:
-        //     30 00 02 AA AA AA AA AA
-        // which means CTS, Block Size=2, STmin=2ms.
-        //
-        // A non-zero Block Size is a HARD limit: after two CFs we must stop
-        // and wait for another FC before sending CF #3. Sending all CFs after
-        // the first FC was the key difference from the working J2534 path.
-
         var remaining = consecutive[...]
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         var expectedSequence: UInt8 = 1
+        var flowControlCount = 0
 
         while !remaining.isEmpty {
-            let waitRemaining = deadline.timeIntervalSinceNow
-            guard waitRemaining > 0 else { throw IsoTpError.timeout }
+            let remainingTimeout = deadline.timeIntervalSinceNow
+            guard remainingTimeout > 0 else { throw IsoTpError.timeout }
 
-            guard let fcData = try await receiveFrame(waitRemaining) else {
+            guard let fcData = try await receiveFrame(remainingTimeout) else {
                 throw IsoTpError.timeout
             }
 
-            // 0x7E8 can contain unrelated UDS traffic. Ignore it while we
-            // are explicitly waiting for the ECU's Flow Control frame.
-            guard case .flowControl(let status, let blockSize, let rawStMin) = IsoTp.parseFrame(fcData) else {
+            guard case .flowControl(let status, let blockSize, let stMin) =
+                    IsoTp.parseFrame(fcData) else {
+                // Ignore unrelated 0x7E8 traffic while waiting for FC.
                 continue
             }
 
+            flowControlCount += 1
+
             switch status {
             case IsoTp.FlowStatus.continueToSend:
-                let delay = max(
-                    IsoTp.stMinToSeconds(rawStMin),
-                    IsoTp.minimumSendIntervalSeconds
-                )
-
-                // BS=0 grants the entire remaining transfer.
-                // Any non-zero BS limits THIS block to exactly that many CFs.
-                let allowed = blockSize == 0
+                // IMPORTANT:
+                // BS=0 means unlimited CFs under this FC.
+                // BS>0 means EXACTLY that many CFs may be sent before another
+                // FC is mandatory.
+                let count = blockSize == 0
                     ? remaining.count
                     : min(Int(blockSize), remaining.count)
 
-                for _ in 0..<allowed {
+                let delay = max(
+                    IsoTp.stMinToSeconds(stMin),
+                    IsoTp.minimumSendIntervalSeconds
+                )
+
+                for _ in 0..<count {
                     try Task.checkCancellation()
 
                     if delay > 0 {
@@ -303,9 +299,11 @@ final class IsoTpSession {
                         )
                     }
 
-                    let frame = remaining.first!
-                    let sequence = frame[0] & 0x0F
+                    guard let frame = remaining.first else {
+                        break
+                    }
 
+                    let sequence = frame[0] & 0x0F
                     guard sequence == expectedSequence else {
                         throw IsoTpError.sequenceMismatch(
                             expected: expectedSequence,
@@ -318,17 +316,12 @@ final class IsoTpSession {
                     expectedSequence = expectedSequence == 15 ? 0 : expectedSequence + 1
                 }
 
-                // If remaining is non-empty and BS was non-zero, the while
-                // loop MUST receive another FC before any further CF can be
-                // transmitted. This is the critical ISO-TP behavior.
-                //
-                // If BS=0, the ECU has authorized the complete remainder and
-                // the next loop iteration is allowed to continue sending it
-                // under that same authorization. In practice this path will
-                // normally finish in one iteration.
+                // With BS=2, this loop MUST come back around and receive
+                // another FC before another CF is sent.
+                // This is the behavior that was missing from the IPA that
+                // produced the user's 21..27 burst.
 
             case IsoTp.FlowStatus.wait:
-                // FC(WT) authorizes zero CFs. Keep waiting for CTS/OVFLW.
                 continue
 
             case IsoTp.FlowStatus.overflow:
@@ -338,6 +331,10 @@ final class IsoTpSession {
                 throw IsoTpError.unexpectedFrame
             }
         }
+
+        // Keep the value live for diagnostics/debugger inspection and prevent
+        // future optimization from making it disappear during debugging.
+        _ = flowControlCount
     }
 
     /// Receives one full UDS message on `rxID` (as filtered by the caller's

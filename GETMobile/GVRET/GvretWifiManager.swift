@@ -343,6 +343,7 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         // must send two CFs and then wait for the next FC rather than blasting
         // the entire request. A J2534/OpenPort channel handles this inside its
         // ISO15765 driver; raw A0/GVRET CAN requires us to do it here.
+        log("HSL ISO-TP ENGINE: V63-BS2-CORRECTED")
         log("HSL ISO-TP: transmitting request and waiting for ECU Flow Control...")
         try await isoTp.sendHsl([UInt8](payload), txID: UInt32(BridgeProtocol.simos18RequestID), timeoutSeconds: timeoutSeconds)
         log("HSL ISO-TP: request transmission complete; waiting for ECU response...")
