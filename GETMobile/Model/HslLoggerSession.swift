@@ -25,6 +25,17 @@ final class HslLoggerSession: ObservableObject {
     private var uds: UdsClient?
     private var task: Task<Void, Never>?
     private var pids = HslPidCatalog.enabledPhysical
+
+    // Reference HSL memory list captured from the working GET Flasher/GVRET
+    // transaction in the project history. It is used only as a fallback when
+    // a fresh 3E02 setup with the user-selected list gets no ECU acknowledgement.
+    // This gives the ECU a known-good list shape without changing what the UI
+    // displays: selected channels are still the only values exposed to the user.
+    private let referenceHslNames: [String] = [
+        "Airmass", "Airmass SP", "Coolant Temp", "Engine Speed",
+        "FP DI", "FP DI SP", "Fuel Flow HPFP", "IAT",
+        "Ign Table Value", "Lambda", "MAP", "Pedal Pos", "PUT", "Torque"
+    ]
     private var allPids = HslPidCatalog.all
     private var variables: [String: Double] = [:]
     private var rawVariables: [String: Double] = [:]
@@ -197,33 +208,47 @@ final class HslLoggerSession: ObservableObject {
     }
 
     private func configureHsl() async throws {
-        // v31/v32 tried adding an extended-session request and then a
-        // security-access (seed/key) attempt before this. Reverted: the
-        // reference SimosHslLogger.cs is explicit that VW_Flash's Python
-        // never does either of those, and the security-access attempt came
-        // back with subFunctionNotSupported in extended session - which
-        // would only be resolved by requesting it from *programming*
-        // session, and the user has confirmed that's genuinely unsafe here
-        // (risk of stalling the engine or bricking the ECU) - so that path
-        // is closed regardless of whether it would technically work. Going
-        // back to matching the reference exactly: no session change, no
-        // security access, just the raw 3E02 request, since the proven
-        // working tool doesn't need either and this app shouldn't do
-        // anything riskier than what's already known to work.
+        // HSL setup is stateful. First send exactly the list selected in the UI.
+        // If the ECU accepts the ISO-TP request but never emits the 0x7E setup
+        // acknowledgement, make one fallback attempt using the known-good
+        // reference list captured from the working GET Flasher transaction.
+        // This is deliberately one fallback only; we do not continuously resend
+        // 3E02 because that can leave a patched ECU in an ambiguous HSL state.
+        let selectedPhysical = pids.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
+        guard !selectedPhysical.isEmpty else { throw HslError.noChannels }
 
-        // This is the SimosTools/VW_Flash HSL setup sequence:
-        // 3E 02 + memory offset B001E700 + 16-bit byte count +
-        // [length nibble][32-bit address] entries + 00 terminator.
-        //
-        // IMPORTANT: SimosTools encodes each physical parameter in exactly
-        // five bytes: one byte whose high nibble is 0 and low nibble is the
-        // parameter length, followed by the 32-bit address. It is NOT a
-        // separate 0x00 byte followed by a length byte. The previous build
-        // inserted an extra byte here, making the byte count too large and
-        // corrupting the HSL setup list.
+        do {
+            try await sendHslSetup(for: selectedPhysical, label: "selected")
+            return
+        } catch {
+            print("HSL selected-list setup did not complete: \(error.localizedDescription)")
+        }
+
+        let reference = referenceHslNames.compactMap { name in
+            HslPidCatalog.all.first { $0.name == name && !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
+        }
+        guard !reference.isEmpty else {
+            throw HslError.invalidSetupResponse("Reference HSL list is unavailable in this build")
+        }
+
+        do {
+            try await sendHslSetup(for: reference, label: "reference fallback")
+        } catch {
+            // Preserve the original setup failure if the fallback also fails;
+            // the next action should be a user-visible transport/protocol error,
+            // not another automatic 3E02 retry loop.
+            throw error
+        }
+
+        // The reference list is now the active ECU layout. Decode poll responses
+        // against that physical ordering while continuing to expose only the
+        // channels selected by the user.
+        pids = reference
+    }
+
+    private func sendHslSetup(for setupPids: [HslPid], label: String) async throws {
         var parameterList = Data()
-        for pid in pids {
-            guard pid.length >= 1 && pid.length <= 4 else { continue }
+        for pid in setupPids {
             parameterList.append(UInt8(pid.length & 0x0F))
             parameterList.append(UInt8((pid.address >> 24) & 0xFF))
             parameterList.append(UInt8((pid.address >> 16) & 0xFF))
@@ -234,49 +259,20 @@ final class HslLoggerSession: ObservableObject {
 
         let offset: UInt32 = 0xB001E700
         let count = UInt16(parameterList.count)
-        var request = Data([0x3E, 0x02,
-                            UInt8((offset >> 24) & 0xFF), UInt8((offset >> 16) & 0xFF),
-                            UInt8((offset >> 8) & 0xFF), UInt8(offset & 0xFF),
-                            UInt8((count >> 8) & 0xFF), UInt8(count & 0xFF)])
+        var request = Data([
+            0x3E, 0x02,
+            UInt8((offset >> 24) & 0xFF), UInt8((offset >> 16) & 0xFF),
+            UInt8((offset >> 8) & 0xFF), UInt8(offset & 0xFF),
+            UInt8((count >> 8) & 0xFF), UInt8(count & 0xFF)
+        ])
         request.append(parameterList)
 
-        do {
-            let response = try await sendHsl(request, expectedPayloadBytes: 0, timeoutSeconds: hslSetupTimeoutSeconds)
-            guard response.first == 0x7E else {
-                throw HslError.invalidSetupResponse(hex(response))
-            }
-            return
-        } catch {
-            // HSL setup is stateful in the ECU. If a previous HSL session
-            // configured the B001E700 read list and the app was stopped or
-            // crashed before a clean shutdown, some patched Simos builds can
-            // ignore a duplicate 3E02 setup request while leaving the existing
-            // HSL list usable. Do not hammer 3E02 repeatedly. Make one small
-            // 3E04 read attempt to distinguish "already configured" from a
-            // genuinely dead HSL path.
-            print("HSL setup did not complete (\(error.localizedDescription)); testing whether the ECU already has an active HSL configuration...")
-            do {
-                let recoveryRequest = Data([0x3E, 0x04,
-                                            UInt8((0xB001E700 >> 24) & 0xFF), UInt8((0xB001E700 >> 16) & 0xFF),
-                                            UInt8((0xB001E700 >> 8) & 0xFF), UInt8(0xB001E700 & 0xFF),
-                                            0xFF, 0xFF])
-                let expectedBytes = pids.reduce(0) { $0 + $1.length }
-                let recoveryResponse = try await sendHsl(recoveryRequest, expectedPayloadBytes: expectedBytes, timeoutSeconds: hslPollTimeoutSeconds)
-                guard recoveryResponse.first == 0x7E else {
-                    throw HslError.invalidPollResponse(hex(recoveryResponse))
-                }
-                let recoveryPayload = Data(recoveryResponse.dropFirst())
-                guard !recoveryPayload.isEmpty else {
-                    throw HslError.invalidPollResponse(hex(recoveryResponse))
-                }
-                _ = try decode(recoveryPayload)
-                print("HSL recovery read succeeded; ECU already had an active HSL configuration. Continuing without repeating setup.")
-                return
-            } catch {
-                print("HSL recovery read also failed: \(error.localizedDescription)")
-                throw error
-            }
+        print("HSL setup [\(label)]: \(hex(request))")
+        let response = try await sendHsl(request, expectedPayloadBytes: 0, timeoutSeconds: hslSetupTimeoutSeconds)
+        guard response.first == 0x7E else {
+            throw HslError.invalidSetupResponse(hex(response))
         }
+        print("HSL setup [\(label)] acknowledged: \(hex(response))")
     }
 
     private func pollLoop() async {

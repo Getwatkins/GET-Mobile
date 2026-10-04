@@ -39,7 +39,11 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if isConnectedReady || demoModeActive {
+            // Keep the active navigation stack alive while HSL owns the
+            // transport. A temporary GVRET TCP reconnect must not throw the
+            // user back to interface selection in the middle of HSL startup.
+            let hslOwnsTransport = hslLogger.isStarting || hslLogger.isRunning || session.isHslActive
+            if isConnectedReady || demoModeActive || hslOwnsTransport {
                 NavigationStack(path: $path) {
                     HomeMenuView(
                         session: session,

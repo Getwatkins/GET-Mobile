@@ -242,6 +242,8 @@ final class IsoTpSession {
     /// smaller STmin (commonly 2 ms); the bridge therefore uses a conservative
     /// 30 ms floor for HSL. Waiting longer than the ECU-requested STmin is
     /// permitted by ISO-TP and materially reduces dropped CFs on this bridge.
+    /// Note: a Flow Control frame `30 00 02` means BS=0 (unlimited) and
+    /// STmin=2 ms. It does NOT mean BS=2.
     func sendHsl(_ payload: [UInt8], txID: UInt32, timeoutSeconds: Double) async throws {
         // V63 HSL ENGINE MARKER.
         // If this line does not appear in the phone debug log, the installed
@@ -275,6 +277,10 @@ final class IsoTpSession {
 
             flowControlCount += 1
 
+            // ISO-TP FC layout is: status, block-size, STmin. For example
+            // 30 00 02 = Continue-To-Send, BS=0 (unlimited), STmin=2 ms.
+            // A0 therefore must send the complete remaining CF sequence for
+            // that FC; waiting for another FC after two frames would be wrong.
             switch status {
             case IsoTp.FlowStatus.continueToSend:
                 // IMPORTANT:

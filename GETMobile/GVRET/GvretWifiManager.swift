@@ -114,8 +114,8 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
                 case .failed(let error):
                     self.state = .failed(error.localizedDescription)
                 case .cancelled:
-                    self.state = .disconnected
                     self.resumePendingReceive()
+                    self.state = self.hslExclusive ? .connecting : .disconnected
                     self.scheduleReconnectIfNeeded()
                 default:
                     break
@@ -557,13 +557,18 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
                     self.startReceiving()
                 } else if isComplete {
                     self.log("Connection closed by remote side")
-                    self.state = .disconnected
                     self.resumePendingReceive()
+                    // Keep HSL ownership alive while the A0 reconnects. The
+                    // UI must not fall back to the interface-selection screen
+                    // merely because the TCP socket was recycled. The active
+                    // HSL session will receive a concrete transport error and
+                    // can be retried from the logger screen.
+                    self.state = self.hslExclusive ? .connecting : .disconnected
                     self.scheduleReconnectIfNeeded()
                 } else if let error {
                     self.log("GVRET receive error: \(error.localizedDescription)")
-                    self.state = .disconnected
                     self.resumePendingReceive()
+                    self.state = self.hslExclusive ? .connecting : .disconnected
                     self.scheduleReconnectIfNeeded()
                 }
             }
