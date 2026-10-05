@@ -68,7 +68,14 @@ final class HslLoggerSession: ObservableObject {
     }
 
     func attach(transport: UdsTransport) {
-        self.stop()
+        // DatalogView is created after LoggingMenuView acquires HSL ownership.
+        // Do NOT call stop() here: stop() releases the shared GVRET HSL lock,
+        // which races the ownership acquired immediately before navigation and
+        // can make the first/next logger start lose its transport mid-session.
+        // Only stop if a genuinely different transport is being attached.
+        if let current = self.transport, current !== transport {
+            self.stop()
+        }
         self.transport = transport
         self.hslTransport = transport as? HslRawTransport
         self.uds = UdsClient(transport: transport)
@@ -161,16 +168,17 @@ final class HslLoggerSession: ObservableObject {
         task = nil
         isRunning = false
         isStarting = false
-        // Task.cancel() does NOT interrupt a wait already suspended inside
-        // the transport (see abandonPendingOperation's doc comment) - free
-        // it explicitly so the next screen that needs the connection isn't
-        // silently blocked by a stale HSL wait.
-        Task {
-            await transport?.abandonPendingOperation()
-            transport?.endHslExclusive()
-        }
-    }
+        isConfigured = false
 
+        // Cancellation alone does not interrupt an ISO-TP receive continuation.
+        // Release it synchronously while this @MainActor session still owns the
+        // transport, then release the HSL lock. The old implementation queued
+        // both operations in a detached Task; a fast Stop -> Start could therefore
+        // run the new HSL transaction before the old cleanup task, leaving the new
+        // request blocked or causing the lock to be released underneath it.
+        transport?.abandonPendingOperation()
+        transport?.endHslExclusive()
+    }
     func clear() {
         samples.removeAll()
         pendingSamples.removeAll()
