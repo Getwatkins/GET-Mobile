@@ -28,15 +28,13 @@ struct LoggingMenuView: View {
 
                 LazyVGrid(columns: [GridItem(.fixed(tileWidth), spacing: 0), GridItem(.fixed(tileWidth), spacing: 0)], spacing: 0) {
                     tile(title: "HSL Datalogger", systemImage: "waveform.path.ecg", tint: GETTheme.amber) {
-                        // Acquire the ownership lock BEFORE navigating, same as
-                        // before: closes the small window where another view
-                        // update could restart normal gauge polling.
-                        session.beginHslLogging()
+                        // Do not acquire HSL ownership here. The HSL logger acquires
+                        // exclusive ownership at the exact moment Start Logging is
+                        // pressed, after DatalogView has attached to the transport.
                         path.append(.hslDatalog)
                     }
 
                     tile(title: "Standard Logger", systemImage: "tablecells", tint: GETTheme.gold) {
-                        session.beginHslLogging()
                         path.append(.standardDatalog)
                     }
                 }

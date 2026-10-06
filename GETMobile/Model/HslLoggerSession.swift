@@ -24,6 +24,9 @@ final class HslLoggerSession: ObservableObject {
     private weak var hslTransport: HslRawTransport?
     private var uds: UdsClient?
     private var task: Task<Void, Never>?
+    // Generation token prevents a cancelled/old HSL task from releasing the
+    // exclusive lock belonging to a newer Start Logging operation.
+    private var sessionGeneration: UInt64 = 0
     private var pids = HslPidCatalog.enabledPhysical
 
     // Reference HSL memory list captured from the working GET Flasher/GVRET
@@ -68,13 +71,11 @@ final class HslLoggerSession: ObservableObject {
     }
 
     func attach(transport: UdsTransport) {
-        // DatalogView is created after LoggingMenuView acquires HSL ownership.
-        // Do NOT call stop() here: stop() releases the shared GVRET HSL lock,
-        // which races the ownership acquired immediately before navigation and
-        // can make the first/next logger start lose its transport mid-session.
-        // Only stop if a genuinely different transport is being attached.
-        if let current = self.transport, current !== transport {
-            self.stop()
+        // Always make the logger state clean before attaching. Ownership is NOT
+        // acquired by the logging menu anymore; Start Logging owns the entire
+        // HSL transaction after this attach has completed.
+        if self.transport !== transport || task != nil || isRunning || isStarting {
+            stop()
         }
         self.transport = transport
         self.hslTransport = transport as? HslRawTransport
@@ -105,11 +106,13 @@ final class HslLoggerSession: ObservableObject {
         isStarting = true
         lastError = nil
         task?.cancel()
+        sessionGeneration &+= 1
+        let generation = sessionGeneration
         task = Task { [weak self] in
             guard let self else { return }
-            // HSL must own the shared 0x7E0/0x7E8 transaction path for the
-            // entire setup + polling session. GVRET uses a real exclusive
-            // lock; other transports receive the protocol default no-op.
+            // Ownership begins only after DatalogView has attached. A generation
+            // token ensures an older cancelled task can never tear down a newer
+            // HSL session.
             await self.transport?.beginHslExclusive()
             do {
                 // v27 switched this to the complete physical parameter file (matching
@@ -159,11 +162,14 @@ final class HslLoggerSession: ObservableObject {
                     self.isStarting = false
                 }
             }
-            await self.transport?.endHslExclusive()
+            if self.sessionGeneration == generation {
+                await self.transport?.endHslExclusive()
+            }
         }
     }
 
     func stop() {
+        sessionGeneration &+= 1
         task?.cancel()
         task = nil
         isRunning = false
