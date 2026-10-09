@@ -245,9 +245,8 @@ final class IsoTpSession {
     /// Note: a Flow Control frame `30 00 02` means BS=0 (unlimited) and
     /// STmin=2 ms. It does NOT mean BS=2.
     func sendHsl(_ payload: [UInt8], txID: UInt32, timeoutSeconds: Double) async throws {
-        // V63 HSL ENGINE MARKER.
-        // If this line does not appear in the phone debug log, the installed
-        // IPA was not built from the corrected HSL sender.
+        // V68 desktop-matched HSL ISO-TP sender marker.
+        // Confirms the installed IPA includes negotiated-STmin pacing.
         if let single = IsoTp.buildSingleFrame(payload) {
             try await sendFrame(txID, single)
             return
@@ -291,10 +290,15 @@ final class IsoTpSession {
                     ? remaining.count
                     : min(Int(blockSize), remaining.count)
 
-                let delay = max(
-                    IsoTp.stMinToSeconds(stMin),
-                    IsoTp.minimumSendIntervalSeconds
-                )
+                // Match the desktop J2534 ISO-TP sender more closely: the ECU's
+                // FC advertises STmin=2 ms (30 00 02). A J2534 driver paces CFs
+                // internally at the negotiated rate, while the previous mobile
+                // sender imposed an extra 30 ms floor on every CF. That adds a
+                // large delay to setup-list transfer over raw GVRET and may cause
+                // the ECU's HSL setup handler to discard the incomplete/late list.
+                // TCP write completion still naturally limits how quickly the A0
+                // bridge can accept each frame; do not add a second artificial floor.
+                let delay = IsoTp.stMinToSeconds(stMin)
 
                 for _ in 0..<count {
                     try Task.checkCancellation()

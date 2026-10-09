@@ -115,31 +115,14 @@ final class HslLoggerSession: ObservableObject {
             // HSL session.
             await self.transport?.beginHslExclusive()
             do {
-                // v27 switched this to the complete physical parameter file (matching
-                // SimosTools/VW_Flash's own behavior), reasoning that a shorter,
-                // selected-channels-only list had previously "produced valid ISO-TP
-                // traffic...but would not reliably complete the list/read cycle."
-                //
-                // A fresh trace on v28 shows the full 100-parameter/509-byte/72-frame
-                // request go out completely clean - correct First Frame length,
-                // correct Flow Control handling (ECU grants BS=00/STmin=02, i.e. "send
-                // it all, don't wait for another FC"), every Consecutive Frame sent -
-                // and then total silence from the ECU for the entire 15s window. Not a
-                // malformed response, not an NRC: nothing at all, as if the message
-                // never fully/correctly arrived. That's the signature of a large burst
-                // getting lost or corrupted somewhere in the WiFi -> A0 -> CAN bus (and
-                // likely a gateway module, on most VW/Audi platforms) hand-off, not a
-                // protocol-level mistake in this app - every byte on the wire matches
-                // what it should be.
-                //
-                // Sending only the currently-selected channels cuts this from 72
-                // Consecutive Frames to a handful, which directly tests that theory.
-                // This is a genuine experiment, not a confirmed permanent fix: if it
-                // still times out with total silence even at this much smaller size,
-                // that rules out burst size/reliability and points at something else
-                // (session state, security access, or the request just not reaching
-                // the ECU at all) - so revert to the full catalog rather than assume.
-                self.pids = self.selectedPids.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
+                // HSL setup is a stateful ECU memory-list operation. The latest v66
+                // trace shows a 49-byte selected list timing out, followed by a 79-byte
+                // reference-list retry also timing out. Do not send two different setup
+                // lists into the same ECU session. Restore the complete enabled physical
+                // catalog used by the earlier logger implementation, then expose only
+                // the user-selected channels in the UI/export. ISO-TP pacing remains
+                // conservative for the WiFi/A0 bridge.
+                self.pids = HslPidCatalog.enabledPhysical.filter { $0.length >= 1 && $0.length <= 4 }
                 guard !self.pids.isEmpty else { throw HslError.noChannels }
                 try await self.configureHsl()
                 await MainActor.run {
@@ -222,42 +205,17 @@ final class HslLoggerSession: ObservableObject {
     }
 
     private func configureHsl() async throws {
-        // HSL setup is stateful. First send exactly the list selected in the UI.
-        // If the ECU accepts the ISO-TP request but never emits the 0x7E setup
-        // acknowledgement, make one fallback attempt using the known-good
-        // reference list captured from the working GET Flasher transaction.
-        // This is deliberately one fallback only; we do not continuously resend
-        // 3E02 because that can leave a patched ECU in an ambiguous HSL state.
-        let selectedPhysical = pids.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
-        guard !selectedPhysical.isEmpty else { throw HslError.noChannels }
-
-        do {
-            try await sendHslSetup(for: selectedPhysical, label: "selected")
-            return
-        } catch {
-            print("HSL selected-list setup did not complete: \(error.localizedDescription)")
+        // Send one authoritative setup list per Start Logging. The previous code
+        // sent the selected subset first and, after a 15-second timeout, immediately
+        // retried with a 14-PID reference list. v66 logs show both short lists getting
+        // Flow Control but no ECU acknowledgement. Use the complete enabled physical
+        // catalog from the outset, matching the older SimosTools-style memory list.
+        let setupPids = HslPidCatalog.enabledPhysical.filter {
+            !$0.isVirtual && $0.length >= 1 && $0.length <= 4
         }
-
-        let reference = referenceHslNames.compactMap { name in
-            HslPidCatalog.all.first { $0.name == name && !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
-        }
-        guard !reference.isEmpty else {
-            throw HslError.invalidSetupResponse("Reference HSL list is unavailable in this build")
-        }
-
-        do {
-            try await sendHslSetup(for: reference, label: "reference fallback")
-        } catch {
-            // Preserve the original setup failure if the fallback also fails;
-            // the next action should be a user-visible transport/protocol error,
-            // not another automatic 3E02 retry loop.
-            throw error
-        }
-
-        // The reference list is now the active ECU layout. Decode poll responses
-        // against that physical ordering while continuing to expose only the
-        // channels selected by the user.
-        pids = reference
+        guard !setupPids.isEmpty else { throw HslError.noChannels }
+        pids = setupPids
+        try await sendHslSetup(for: setupPids, label: "full physical catalog")
     }
 
     private func sendHslSetup(for setupPids: [HslPid], label: String) async throws {
@@ -281,7 +239,7 @@ final class HslLoggerSession: ObservableObject {
         ])
         request.append(parameterList)
 
-        print("HSL setup [\(label)]: \(hex(request))")
+        print("HSL setup [\(label)]: pidCount=\(setupPids.count) requestBytes=\(request.count) payload=\(hex(request))")
         let response = try await sendHsl(request, expectedPayloadBytes: 0, timeoutSeconds: hslSetupTimeoutSeconds)
         guard response.first == 0x7E else {
             throw HslError.invalidSetupResponse(hex(response))
