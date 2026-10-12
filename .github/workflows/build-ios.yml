@@ -12,6 +12,9 @@ jobs:
     name: Build GET Mobile
     runs-on: macos-latest
 
+    env:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,42 +47,14 @@ jobs:
         run: |
           xcodebuild -list -project GETMobile.xcodeproj
 
-      - name: Build
+      - name: Verify signing config
         run: |
-          xcodebuild \
-            -project GETMobile.xcodeproj \
-            -scheme GETMobile \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build
+          test -n "$APPLE_TEAM_ID" || {
+            echo "ERROR: APPLE_TEAM_ID secret is required for Sideloadly export"
+            exit 1
+          }
 
-      - name: Create export options
-        run: |
-          mkdir -p build
-          cat > build/ExportOptions.plist <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>destination</key>
-              <string>export</string>
-              <key>method</key>
-              <string>development</string>
-              <key>signingStyle</key>
-              <string>automatic</string>
-              <key>stripSwiftSymbols</key>
-              <true/>
-              <key>teamID</key>
-              <string></string>
-          </dict>
-          </plist>
-          EOF
-
-      - name: Archive and export IPA
+      - name: Archive app
         run: |
           xcodebuild \
             -project GETMobile.xcodeproj \
@@ -88,11 +63,32 @@ jobs:
             -sdk iphoneos \
             -derivedDataPath build \
             -archivePath build/GETMobile.xcarchive \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
+            -allowProvisioningUpdates \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             archive
 
+      - name: Create export options
+        run: |
+          mkdir -p build
+          cat > build/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>development</string>
+              <key>teamID</key>
+              <string>${APPLE_TEAM_ID}</string>
+              <key>signingStyle</key>
+              <string>automatic</string>
+              <key>stripSwiftSymbols</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Export IPA
+        run: |
           xcodebuild \
             -exportArchive \
             -archivePath build/GETMobile.xcarchive \
