@@ -12,20 +12,18 @@ targets:
   GETMobile:
     type: application
     platform: iOS
+    # Everything under GETMobile/ is picked up automatically: .swift files are
+    # compiled; Assets.xcassets (-> Assets.car), the *.csv data files and the
+    # *.bin unlock patches are copied into the app bundle as resources.
+    #
+    # NOTE: do not exclude Assets.xcassets / Flash/Data / Diagnostics/Data here and
+    # do not add a `resources:` key - XcodeGen has no such target key, it is
+    # silently ignored, and the excluded files then never make it into the app
+    # (this is what shrank the IPA from ~2.8 MB to ~0.5 MB).
     sources:
       - path: GETMobile
         excludes:
-          - Assets.xcassets
-          - Flash/Data/**
-          - Diagnostics/Data/**
-          - "*.md"
-    resources:
-      - path: GETMobile/Assets.xcassets
-      - path: GETMobile/Flash/Data/box_codes.csv
-      - path: GETMobile/Flash/Data/simos18_1_unlock_patch.bin
-      - path: GETMobile/Flash/Data/simos18_10_unlock_patch.bin
-      - path: GETMobile/Diagnostics/Data/simos18_ecm_dtcs.csv
-      - path: GETMobile/Diagnostics/Data/sae_generic_dtcs.csv
+          - "**/*.md"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.getwatkins.getmobile
