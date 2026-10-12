@@ -1,5 +1,6 @@
 import SwiftUI
 import Charts
+import UniformTypeIdentifiers
 
 struct DatalogView: View {
     @ObservedObject var logger: HslLoggerSession
@@ -10,6 +11,7 @@ struct DatalogView: View {
     @State private var shareURL: URL?
     @State private var exportError: String?
     @State private var selectedChartName = "Engine Speed"
+    @State private var showFileImporter = false
 
     var body: some View {
         ScrollView {
@@ -47,6 +49,23 @@ struct DatalogView: View {
             .sheet(isPresented: $showPidPicker) {
                 HslPidPicker(logger: logger)
             }
+            .fileImporter(isPresented: $showFileImporter,
+                          allowedContentTypes: [.commaSeparatedText, .plainText, .data],
+                          allowsMultipleSelection: false) { result in
+                switch result {
+                case .success(let urls):
+                    if let url = urls.first { logger.importParameterFile(from: url) }
+                case .failure(let error):
+                    exportError = "Could not open parameter file: \(error.localizedDescription)"
+                }
+            }
+            .onChange(of: logger.selectedFile) { _ in
+                // A different file has different channels - keep the chart on one that exists.
+                if !logger.selectedPids.contains(where: { $0.name == selectedChartName }),
+                   let first = logger.selectedPids.first {
+                    selectedChartName = first.name
+                }
+            }
 
             .onAppear {
                 // HSL ownership was acquired by LoggingMenuView BEFORE this
@@ -75,6 +94,8 @@ struct DatalogView: View {
 
     private var controls: some View {
         VStack(spacing: 10) {
+            parameterFileSection
+
             HStack(spacing: 10) {
                 Button {
                     if logger.isRunning { logger.stop() } else { logger.start() }
@@ -86,7 +107,8 @@ struct DatalogView: View {
                         .foregroundColor(.black)
                         .cornerRadius(7)
                     }
-                    .disabled(logger.isStarting)
+                    .disabled(logger.isStarting || (logger.selectedFile == nil && !logger.isRunning))
+                    .opacity(logger.selectedFile == nil && !logger.isRunning ? 0.4 : 1)
 
                 Button {
                     showPidPicker = true
@@ -102,16 +124,14 @@ struct DatalogView: View {
             }
 
             HStack {
-                Text("Rate")
+                Text("Poll Delay")
                 Spacer()
-                Picker("Rate", selection: $logger.sampleRate) {
-                    Text("5 Hz").tag(5.0)
-                    Text("10 Hz").tag(10.0)
-                    Text("15 Hz").tag(15.0)
-                    Text("20 Hz").tag(20.0)
+                Stepper(value: $logger.pollDelayMs, in: 0...1000, step: 10) {
+                    Text("\(logger.pollDelayMs) ms")
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 260)
+                .frame(maxWidth: 220)
             }
             .font(.system(size: 13, weight: .semibold))
             .foregroundColor(.gray)
@@ -168,6 +188,61 @@ struct DatalogView: View {
         .background(GETTheme.panelBackground)
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(GETTheme.border, lineWidth: 1))
         .cornerRadius(8)
+    }
+
+    /// Mirrors the desktop logger's "Parameter File" dropdown + "Browse for custom .csv...".
+    /// Nothing is pre-selected: the correct file depends on the ECU's software version.
+    private var parameterFileSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Parameter File")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.gray)
+                Spacer()
+                Menu {
+                    ForEach(logger.parameterFiles) { file in
+                        Button {
+                            logger.selectParameterFile(file)
+                        } label: {
+                            if logger.selectedFile == file {
+                                Label(file.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(file.displayName)
+                            }
+                        }
+                    }
+                    Divider()
+                    Button {
+                        showFileImporter = true
+                    } label: {
+                        Label("Import custom .csv...", systemImage: "square.and.arrow.down")
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(logger.selectedFile?.displayName ?? "Select a file...")
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 10))
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(logger.selectedFile == nil ? GETTheme.warningRed : GETTheme.amber)
+                }
+                .disabled(logger.isRunning || logger.isStarting)
+            }
+            Text(parameterFileInfo)
+                .font(.system(size: 11))
+                .foregroundColor(.gray)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var parameterFileInfo: String {
+        guard logger.selectedFile != nil else {
+            return "Choose the file that matches your ECU's software version (e.g. S50, O30). A mismatched file reads the wrong memory addresses."
+        }
+        let polled = logger.parameters.filter { !$0.isVirtual }.count
+        let calculated = logger.parameters.count - polled
+        return "\(logger.parameters.count) parameters in this file (\(polled) read from the ECU, \(calculated) calculated)."
     }
 
     private var currentValues: some View {
@@ -245,16 +320,34 @@ struct HslPidPicker: View {
 
     private var filtered: [HslPid] {
         let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return HslPidCatalog.all }
-        return HslPidCatalog.all.filter { $0.name.localizedCaseInsensitiveContains(q) || $0.assignment?.localizedCaseInsensitiveContains(q) == true }
+        guard !q.isEmpty else { return logger.parameters }
+        return logger.parameters.filter { $0.name.localizedCaseInsensitiveContains(q) || $0.assignment?.localizedCaseInsensitiveContains(q) == true }
+    }
+
+    private func detail(for pid: HslPid) -> String {
+        var parts: [String] = []
+        if pid.isVirtual {
+            parts.append("calculated")
+        } else {
+            parts.append("0x" + String(pid.address, radix: 16, uppercase: true))
+            parts.append("\(pid.length) byte" + (pid.length == 1 ? "" : "s"))
+        }
+        if !pid.unit.isEmpty { parts.append(pid.unit) }
+        return parts.joined(separator: " • ")
     }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    Text("Select the channels to record. HSL reads the ECU memory list in one high-speed response, so selecting more channels changes the response size but not the basic logging method.")
+                    Text("Choose which channels to display and export. The ECU is always asked for every parameter in the selected file (like the desktop logger) - this only filters what you see and save.")
                         .font(.system(size: 12)).foregroundColor(.gray)
+                    HStack(spacing: 16) {
+                        Button("Select All") { logger.selectAllChannels() }
+                        Button("Select None") { logger.selectNoChannels() }
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundColor(GETTheme.amber)
                 }
                 ForEach(filtered) { pid in
                     Button {
@@ -269,7 +362,7 @@ struct HslPidPicker: View {
                                 .foregroundColor(logger.selectedNames.contains(pid.name) ? GETTheme.amber : .gray)
                             VStack(alignment: .leading) {
                                 Text(pid.name).foregroundColor(.white)
-                                Text("0x\(String(pid.address, radix: 16, uppercase: true)) • \(pid.length) byte\(pid.length == 1 ? "" : "s")\(pid.unit.isEmpty ? "" : " • \(pid.unit)")")
+                                Text(detail(for: pid))
                                     .font(.system(size: 10)).foregroundColor(.gray)
                             }
                             Spacer()

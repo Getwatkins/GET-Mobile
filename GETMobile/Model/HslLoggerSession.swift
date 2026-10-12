@@ -16,45 +16,40 @@ final class HslLoggerSession: ObservableObject {
     @Published private(set) var startDate: Date?
     @Published private(set) var latestValues: [String: Double] = [:]
     @Published private(set) var samples: [HslLogSample] = []
-    @Published var selectedNames: Set<String> = ["Engine Speed", "MAP", "PUT", "Lambda", "Torque", "Pedal Pos", "IAT", "Coolant Temp"]
-    @Published var sampleRate: Double = 10
+    /// Channels shown in the UI / written to the exported CSV. This is a DISPLAY
+    /// filter only: the ECU's HSL list is always every polled row of the selected
+    /// parameter file (see start()), exactly like the desktop logger.
+    @Published var selectedNames: Set<String> = []
+    /// Pause after each completed poll, in ms - the desktop logger's "Poll Delay (ms)"
+    /// box (Thread.Sleep(pollDelayMs) after every PollOnce), default 100.
+    @Published var pollDelayMs: Int = 100
     @Published var lastError: String?
+
+    /// Parameter files the user can pick from: the bundled parameters_3e_<box code>.csv
+    /// set (same files as the desktop app) plus any custom .csv imported this session.
+    @Published private(set) var parameterFiles: [HslParameterFile] = HslParameterFiles.bundled()
+    /// Nothing is selected by default on purpose - the right file depends on the
+    /// ECU's software version, and the wrong one reads the wrong memory addresses.
+    @Published private(set) var selectedFile: HslParameterFile?
+    /// Every row of the selected file, in file order (physical and calculated).
+    @Published private(set) var parameters: [HslPid] = []
 
     private weak var transport: UdsTransport?
     private weak var hslTransport: HslRawTransport?
     private var uds: UdsClient?
     private var task: Task<Void, Never>?
-    // Generation token prevents a cancelled/old HSL task from releasing the
-    // exclusive lock belonging to a newer Start Logging operation.
-    private var sessionGeneration: UInt64 = 0
-    private var pids = HslPidCatalog.enabledPhysical
-
-    // Reference HSL memory list captured from the working GET Flasher/GVRET
-    // transaction in the project history. It is used only as a fallback when
-    // a fresh 3E02 setup with the user-selected list gets no ECU acknowledgement.
-    // This gives the ECU a known-good list shape without changing what the UI
-    // displays: selected channels are still the only values exposed to the user.
-    private let referenceHslNames: [String] = [
-        "Airmass", "Airmass SP", "Coolant Temp", "Engine Speed",
-        "FP DI", "FP DI SP", "Fuel Flow HPFP", "IAT",
-        "Ign Table Value", "Lambda", "MAP", "Pedal Pos", "PUT", "Torque"
-    ]
-    private var allPids = HslPidCatalog.all
+    /// The polled (non-virtual) rows actually sent to the ECU, in file order.
+    /// Response bytes are decoded positionally against exactly this list.
+    private var pids: [HslPid] = []
     private var variables: [String: Double] = [:]
     private var rawVariables: [String: Double] = [:]
 
-    /// HSL can realistically sustain a much higher sample rate than the
-    /// Standard/DID logger (one combined request returns every channel,
-    /// vs. one request per channel there) - up to 20Hz is selectable. Every
-    /// `samples.append` is a `@Published` change that drives a full Swift
-    /// Charts re-render, which is expensive enough that doing it 10-20
-    /// times a second was, in practice, backing up the main thread faster
-    /// than it could keep up - severe enough to eventually get the app
-    /// killed as unresponsive after several seconds. Full-rate polling and
-    /// recording is still genuinely valuable for CSV accuracy, so instead
-    /// of slowing that down, only the *publish* of new samples (what makes
-    /// the chart re-render) is capped to this rate; recording continues at
-    /// whatever the poll loop actually achieves.
+    /// Every `samples.append` is a `@Published` change that drives a full Swift
+    /// Charts re-render, which is expensive enough that doing it many times a
+    /// second backed up the main thread and eventually got the app killed as
+    /// unresponsive. Recording continues at whatever rate the poll loop achieves;
+    /// only the *publish* of new samples (what makes the chart re-render) is
+    /// capped to `samplesPublishInterval`.
     private var pendingSamples: [HslLogSample] = []
     private var lastSamplesFlush = Date.distantPast
     private var lastLatestValuesPublish = Date.distantPast
@@ -62,8 +57,49 @@ final class HslLoggerSession: ObservableObject {
     private var logFileURL: URL?
 
     var selectedPids: [HslPid] {
-        allPids.filter { selectedNames.contains($0.name) }
+        parameters.filter { selectedNames.contains($0.name) }
     }
+
+    // MARK: Parameter file selection
+
+    /// Names pre-checked after a file is chosen (only those the file contains).
+    private static let preferredDefaultNames = [
+        "Engine Speed", "MAP", "PUT", "Lambda", "Torque", "Pedal Pos", "IAT", "Coolant Temp"
+    ]
+
+    func selectParameterFile(_ file: HslParameterFile) {
+        guard !isRunning, !isStarting else { return }
+        do {
+            let loaded = try HslParameterFiles.load(file)
+            clear()
+            parameters = loaded
+            selectedFile = file
+            let physicalNames = loaded.filter { !$0.isVirtual }.map(\.name)
+            var chosen = Set(Self.preferredDefaultNames.filter { physicalNames.contains($0) })
+            if chosen.isEmpty { chosen = Set(physicalNames.prefix(8)) }
+            selectedNames = chosen
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func importParameterFile(from url: URL) {
+        guard !isRunning, !isStarting else { return }
+        do {
+            let file = try HslParameterFiles.importCustom(from: url)
+            if let i = parameterFiles.firstIndex(where: { $0.id == file.id }) {
+                parameterFiles[i] = file
+            } else {
+                parameterFiles.append(file)
+            }
+            selectParameterFile(file)
+        } catch {
+            lastError = "Could not import parameter file: \(error.localizedDescription)"
+        }
+    }
+
+    func selectAllChannels() { selectedNames = Set(parameters.map(\.name)) }
+    func selectNoChannels() { selectedNames = [] }
 
     var duration: TimeInterval {
         guard let startDate else { return 0 }
@@ -71,11 +107,13 @@ final class HslLoggerSession: ObservableObject {
     }
 
     func attach(transport: UdsTransport) {
-        // Always make the logger state clean before attaching. Ownership is NOT
-        // acquired by the logging menu anymore; Start Logging owns the entire
-        // HSL transaction after this attach has completed.
-        if self.transport !== transport || task != nil || isRunning || isStarting {
-            stop()
+        // DatalogView is created after LoggingMenuView acquires HSL ownership.
+        // Do NOT call stop() here: stop() releases the shared GVRET HSL lock,
+        // which races the ownership acquired immediately before navigation and
+        // can make the first/next logger start lose its transport mid-session.
+        // Only stop if a genuinely different transport is being attached.
+        if let current = self.transport, current !== transport {
+            self.stop()
         }
         self.transport = transport
         self.hslTransport = transport as? HslRawTransport
@@ -99,6 +137,10 @@ final class HslLoggerSession: ObservableObject {
             lastError = HslError.noTransport.localizedDescription
             return
         }
+        guard selectedFile != nil, !parameters.isEmpty else {
+            lastError = HslError.noParameterFile.localizedDescription
+            return
+        }
         guard !selectedPids.isEmpty else {
             lastError = HslError.noChannels.localizedDescription
             return
@@ -106,23 +148,19 @@ final class HslLoggerSession: ObservableObject {
         isStarting = true
         lastError = nil
         task?.cancel()
-        sessionGeneration &+= 1
-        let generation = sessionGeneration
         task = Task { [weak self] in
             guard let self else { return }
-            // Ownership begins only after DatalogView has attached. A generation
-            // token ensures an older cancelled task can never tear down a newer
-            // HSL session.
+            // HSL must own the shared 0x7E0/0x7E8 transaction path for the
+            // entire setup + polling session. GVRET uses a real exclusive
+            // lock; other transports receive the protocol default no-op.
             await self.transport?.beginHslExclusive()
             do {
-                // HSL setup is a stateful ECU memory-list operation. The latest v66
-                // trace shows a 49-byte selected list timing out, followed by a 79-byte
-                // reference-list retry also timing out. Do not send two different setup
-                // lists into the same ECU session. Restore the complete enabled physical
-                // catalog used by the earlier logger implementation, then expose only
-                // the user-selected channels in the UI/export. ISO-TP pacing remains
-                // conservative for the WiFi/A0 bridge.
-                self.pids = HslPidCatalog.enabledPhysical.filter { $0.length >= 1 && $0.length <= 4 }
+                // Mirror the desktop SimosHslLogger: the ECU's HSL list is EVERY
+                // polled (non-virtual) row of the selected parameter file, in file
+                // order, sent in one 3E02 setup request. Response bytes are then
+                // decoded positionally against this same list. The channel picker
+                // only filters what is displayed/exported - it never changes this.
+                self.pids = self.parameters.filter { !$0.isVirtual && $0.length >= 1 && $0.length <= 4 }
                 guard !self.pids.isEmpty else { throw HslError.noChannels }
                 try await self.configureHsl()
                 await MainActor.run {
@@ -145,14 +183,11 @@ final class HslLoggerSession: ObservableObject {
                     self.isStarting = false
                 }
             }
-            if self.sessionGeneration == generation {
-                await self.transport?.endHslExclusive()
-            }
+            await self.transport?.endHslExclusive()
         }
     }
 
     func stop() {
-        sessionGeneration &+= 1
         task?.cancel()
         task = nil
         isRunning = false
@@ -205,20 +240,15 @@ final class HslLoggerSession: ObservableObject {
     }
 
     private func configureHsl() async throws {
-        // Send one authoritative setup list per Start Logging. The previous code
-        // sent the selected subset first and, after a 15-second timeout, immediately
-        // retried with a 14-PID reference list. v66 logs show both short lists getting
-        // Flow Control but no ECU acknowledgement. Use the complete enabled physical
-        // catalog from the outset, matching the older SimosTools-style memory list.
-        let setupPids = HslPidCatalog.enabledPhysical.filter {
-            !$0.isVirtual && $0.length >= 1 && $0.length <= 4
-        }
-        guard !setupPids.isEmpty else { throw HslError.noChannels }
-        pids = setupPids
-        try await sendHslSetup(for: setupPids, label: "full physical catalog")
+        // One 3E02 setup request, one attempt - same as the desktop logger. There is
+        // deliberately no fallback list and no retry loop: re-sending 3E02 can leave a
+        // patched ECU in an ambiguous HSL state, and a hardcoded fallback list would
+        // use addresses that only match one ECU software version.
+        guard !pids.isEmpty else { throw HslError.noChannels }
+        try await sendHslSetup(for: pids)
     }
 
-    private func sendHslSetup(for setupPids: [HslPid], label: String) async throws {
+    private func sendHslSetup(for setupPids: [HslPid]) async throws {
         var parameterList = Data()
         for pid in setupPids {
             parameterList.append(UInt8(pid.length & 0x0F))
@@ -239,18 +269,16 @@ final class HslLoggerSession: ObservableObject {
         ])
         request.append(parameterList)
 
-        print("HSL setup [\(label)]: pidCount=\(setupPids.count) requestBytes=\(request.count) payload=\(hex(request))")
+        print("HSL setup [\(selectedFile?.displayName ?? "?"), \(setupPids.count) params, \(parameterList.count) list bytes]: \(hex(request))")
         let response = try await sendHsl(request, expectedPayloadBytes: 0, timeoutSeconds: hslSetupTimeoutSeconds)
         guard response.first == 0x7E else {
             throw HslError.invalidSetupResponse(hex(response))
         }
-        print("HSL setup [\(label)] acknowledged: \(hex(response))")
+        print("HSL setup acknowledged: \(hex(response))")
     }
 
     private func pollLoop() async {
-        let interval = UInt64(max(0.02, 1.0 / max(1.0, sampleRate)) * 1_000_000_000)
         while !Task.isCancelled {
-            let started = Date()
             do {
                 let request = Data([0x3E, 0x04,
                                     UInt8((0xB001E700 >> 24) & 0xFF), UInt8((0xB001E700 >> 16) & 0xFF),
@@ -294,15 +322,18 @@ final class HslLoggerSession: ObservableObject {
                     break
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
+                continue
             } catch {
                 lastError = error.localizedDescription
                 // A transient transport error should not destroy a usable log. Back off briefly.
                 try? await Task.sleep(nanoseconds: 100_000_000)
+                continue
             }
-            let elapsed = Date().timeIntervalSince(started)
-            let target = Double(interval) / 1_000_000_000.0
-            if elapsed < target {
-                try? await Task.sleep(nanoseconds: UInt64((target - elapsed) * 1_000_000_000.0))
+            // Desktop behavior: pause pollDelayMs AFTER each completed poll
+            // (Thread.Sleep(pollDelayMs) in Simos18LoggerControl.PollLoop).
+            let delayMs = max(0, pollDelayMs)
+            if delayMs > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
             }
         }
         // Flush anything recorded since the last publish - otherwise the
@@ -318,16 +349,12 @@ final class HslLoggerSession: ObservableObject {
         isRunning = false
     }
 
-    /// The one-time 3E02 setup transaction has to build a list of every
-    /// physical parameter's memory read on the ECU (100 entries in the full
-    /// catalog) before it can ack - that appears to take noticeably longer
-    /// than any single 3E04 poll. The v28 debug log showed the Flow Control
-    /// arrive fine (BS=00 "send everything", STmin=02) and the full 72-frame
-    /// request transmit cleanly with no NRC, but then dead silence on 0x7E8
-    /// for the entire wait: the ECU never answered inside the old 6s window
-    /// at all, not even late. Give the setup phase noticeably more room
-    /// than a poll needs, since a slow-but-eventually-successful ack there
-    /// is a very different failure than a wedged connection.
+    /// The one-time 3E02 setup transaction sends the whole parameter file's polled
+    /// list (68 entries / ~350 request bytes for the bundled files) and the ECU has
+    /// to build its memory-read list before it can ack - noticeably slower than any
+    /// single 3E04 poll. Give the setup phase much more room than a poll needs, since
+    /// a slow-but-eventually-successful ack is a very different failure than a
+    /// wedged connection.
     private let hslSetupTimeoutSeconds: Double = 15.0
     /// Each 3E04 poll only reads back the already-built list - much
     /// smaller/faster than setup - so it keeps a short timeout so a single
@@ -364,9 +391,11 @@ final class HslLoggerSession: ObservableObject {
                     bits |= UInt32(b) << UInt32(i * 8)
                 }
                 let floatValue = Float(bitPattern: bits)
-                guard floatValue.isFinite else {
-                    throw HslError.invalidNumericValue(pid: pid.name, reason: "non-finite float")
-                }
+                // The ECU list is now the whole parameter file, not just the handful of
+                // channels on screen. One garbage float (NaN/inf) in a channel nobody is
+                // looking at must not throw away the entire poll, so skip just that
+                // channel; the stream position has already advanced past it.
+                guard floatValue.isFinite else { continue }
                 raw = Double(floatValue)
             } else {
                 var value: UInt64 = 0
@@ -416,7 +445,7 @@ final class HslLoggerSession: ObservableObject {
         // Resolve virtual/derived entries after the physical list is decoded.
         var resolved = variables
         for _ in 0..<3 {
-            for pid in allPids where pid.isVirtual {
+            for pid in parameters where pid.isVirtual {
                 if pid.equation == "hp" || pid.equation == "tq" || pid.equation == "speed_zero_sixty" || pid.equation == "speed_sixty_onethirty" || pid.equation == "dist_zero_sixty" || pid.equation == "dist_emile" || pid.equation == "dist_qmile" {
                     continue
                 }
@@ -430,12 +459,12 @@ final class HslLoggerSession: ObservableObject {
             resolved["tq"] = tq
             resolved["hp"] = tq * rpm / 7127.0
         }
-        for pid in allPids where pid.isVirtual {
+        for pid in parameters where pid.isVirtual {
             if let value = resolved[pid.name.lowercased()] { variables[pid.name.lowercased()] = value }
         }
 
         var output: [String: Double] = [:]
-        for pid in allPids where selectedNames.contains(pid.name) {
+        for pid in parameters where selectedNames.contains(pid.name) {
             if let value = variables[pid.name.lowercased()], value.isFinite {
                 output[pid.name] = value
             }
@@ -469,6 +498,7 @@ final class HslLoggerSession: ObservableObject {
         case shortPollResponse(expectedAtLeast: Int, got: Int)
         case invalidNumericValue(pid: String, reason: String)
         case noChannels
+        case noParameterFile
         case noTransport
         case transportNotExclusive
         var errorDescription: String? {
@@ -478,6 +508,7 @@ final class HslLoggerSession: ObservableObject {
             case .shortPollResponse(let expected, let got): return "HSL response was short: expected at least \(expected) bytes, received \(got)."
             case .invalidNumericValue(let pid, let reason): return "HSL decode rejected \(pid): \(reason)."
             case .noChannels: return "Select at least one HSL channel before starting the logger."
+            case .noParameterFile: return "Select an HSL parameter file (the one matching your ECU software version) before starting the logger."
             case .noTransport: return "HSL logging is not available on the current transport."
             case .transportNotExclusive:
                 return "HSL transport is not exclusively owned."
