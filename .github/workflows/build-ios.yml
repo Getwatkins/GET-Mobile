@@ -41,6 +41,15 @@ jobs:
       - name: List project
         run: xcodebuild -list -project GETMobile.xcodeproj
 
+      # Diagnostics: shows exactly which non-code files the build can see.
+      - name: Show bundled-resource inputs
+        run: |
+          echo "=== project.yml ==="
+          cat project.yml
+          echo
+          echo "=== Non-Swift files under GETMobile/ ==="
+          find GETMobile -type f ! -name '*.swift' | sort
+
       # The old version of this step ran `xcodebuild -exportArchive` with an empty
       # teamID, which always fails ("teamID should be non-empty"). The app is built
       # unsigned anyway, so instead of exporting we archive unsigned and zip the
@@ -84,6 +93,8 @@ jobs:
             fi
           done
           if [ "$MISSING" -ne 0 ]; then
+            echo "=== Contents of the built app bundle ==="
+            ls -la "$APP_PATH"
             echo "Check that these files exist under GETMobile/ in the repo:"
             echo "  GETMobile/Flash/Data/  (box_codes.csv, simos18_1_unlock_patch.bin, simos18_10_unlock_patch.bin)"
             echo "  GETMobile/Diagnostics/Data/  (simos18_ecm_dtcs.csv, sae_generic_dtcs.csv)"
