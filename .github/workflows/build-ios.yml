@@ -1,4 +1,3 @@
-
 name: iOS CI
 
 on:
@@ -57,3 +56,58 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build
+
+      - name: Create export options
+        run: |
+          mkdir -p build
+          cat > build/ExportOptions.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>destination</key>
+              <string>export</string>
+              <key>method</key>
+              <string>development</string>
+              <key>signingStyle</key>
+              <string>automatic</string>
+              <key>stripSwiftSymbols</key>
+              <true/>
+              <key>teamID</key>
+              <string></string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Archive and export IPA
+        run: |
+          xcodebuild \
+            -project GETMobile.xcodeproj \
+            -scheme GETMobile \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            -archivePath build/GETMobile.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive
+
+          xcodebuild \
+            -exportArchive \
+            -archivePath build/GETMobile.xcarchive \
+            -exportPath build/output \
+            -exportOptionsPlist build/ExportOptions.plist
+
+          ls -lh build/output/*.ipa || {
+            echo "ERROR: IPA file was not created"
+            exit 1
+          }
+
+      - name: Upload IPA artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GET-Mobile-IPA
+          path: build/output/*.ipa
+          retention-days: 7
