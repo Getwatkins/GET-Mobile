@@ -4,33 +4,13 @@ import Foundation
 /// LogParameterCsvLoader reads (Name, Unit, Equation, Address, Length, Signed,
 /// ProgMin, ProgMax, Assign To); everything else in the CSV is ignored.
 ///
+/// The `HslPid` model lives in `HslPidCatalog.swift` and is an app-wide type
+/// used by both the logger session and the file loader. Keeping this struct here
+/// caused a duplicate type declaration and ambiguous lookups during compilation.
+///
 /// This used to be defined next to a hardcoded, S50-only catalog
 /// (HslPidCatalog). The catalog is gone: every address now comes from the
 /// parameter file the user selects, exactly like the desktop logger.
-struct HslPid: Identifiable, Hashable {
-    /// Position in the file. Part of `id` so a custom file that repeats a name
-    /// still produces unique SwiftUI identities.
-    let index: Int
-    let name: String
-    let unit: String
-    let equation: String
-    let address: UInt32
-    let length: Int
-    let signed: Bool
-    let min: Double
-    let max: Double
-    let assignment: String?
-    let enabled: Bool
-
-    var id: String { "\(index)-\(name)" }
-
-    /// Matches desktop LogParameter.Virtual: address 0xFFFF or 0xFFFFFFFF means
-    /// "never read from the ECU - value comes entirely from the equation".
-    var isVirtual: Bool { address == 0xFFFF_FFFF || address == 0xFFFF }
-}
-
-/// A selectable parameter file - the iOS counterpart of one entry in the
-/// desktop Simos18LoggerControl "Parameter File" dropdown.
 struct HslParameterFile: Identifiable, Hashable {
     let id: String
     let displayName: String
