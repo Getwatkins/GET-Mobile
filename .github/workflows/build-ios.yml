@@ -1,25 +1,20 @@
-name: iOS CI
+name: Build iOS IPA
 
 on:
   push:
-    branches: ["main"]
-  pull_request:
-    branches: ["main"]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
     name: Build GET Mobile
-    runs-on: macos-latest
-
-    env:
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    runs-on: macos-26
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify project configuration
+      - name: Verify repository layout
         run: |
           echo "Repository root:"
           pwd
@@ -43,19 +38,18 @@ jobs:
             exit 1
           }
 
-      - name: Verify scheme
-        run: |
-          xcodebuild -list -project GETMobile.xcodeproj
+      - name: List project
+        run: xcodebuild -list -project GETMobile.xcodeproj
 
-      - name: Verify signing config
+      # The old version of this step ran `xcodebuild -exportArchive` with an empty
+      # teamID, which always fails ("teamID should be non-empty"). The app is built
+      # unsigned anyway, so instead of exporting we archive unsigned and zip the
+      # .app into an .ipa ourselves (Payload/GETMobile.app -> GETMobile.ipa).
+      # The resulting IPA is UNSIGNED: sign/install it with your sideloading tool.
+      - name: Archive and package unsigned IPA
         run: |
-          test -n "$APPLE_TEAM_ID" || {
-            echo "ERROR: APPLE_TEAM_ID secret is required for Sideloadly export"
-            exit 1
-          }
+          set -euo pipefail
 
-      - name: Archive app
-        run: |
           xcodebuild \
             -project GETMobile.xcodeproj \
             -scheme GETMobile \
@@ -63,47 +57,31 @@ jobs:
             -sdk iphoneos \
             -derivedDataPath build \
             -archivePath build/GETMobile.xcarchive \
-            -allowProvisioningUpdates \
-            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
             archive
 
-      - name: Create export options
-        run: |
-          mkdir -p build
-          cat > build/ExportOptions.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>development</string>
-              <key>teamID</key>
-              <string>${APPLE_TEAM_ID}</string>
-              <key>signingStyle</key>
-              <string>automatic</string>
-              <key>stripSwiftSymbols</key>
-              <true/>
-          </dict>
-          </plist>
-          EOF
+          APP_PATH="build/GETMobile.xcarchive/Products/Applications/GETMobile.app"
+          test -d "$APP_PATH" || {
+            echo "ERROR: $APP_PATH not found in archive"
+            exit 1
+          }
 
-      - name: Export IPA
-        run: |
-          xcodebuild \
-            -exportArchive \
-            -archivePath build/GETMobile.xcarchive \
-            -exportPath build/output \
-            -exportOptionsPlist build/ExportOptions.plist
+          rm -rf build/output build/Payload
+          mkdir -p build/output build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          (cd build && zip -qry output/GETMobile.ipa Payload)
+          rm -rf build/Payload
 
           ls -lh build/output/*.ipa || {
             echo "ERROR: IPA file was not created"
             exit 1
           }
 
-      - name: Upload IPA artifact
-        if: success()
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: GET-Mobile-IPA
-          path: build/output/*.ipa
-          retention-days: 7
+          name: GETMobile-ipa
+          path: build/output/GETMobile.ipa
+          if-no-files-found: error
