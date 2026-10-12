@@ -25,9 +25,9 @@ enum HslParameterFileError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unreadable(let name):
-            return "Could not read parameter file \"\(name)\"."
+            return "Could not read parameter file \(name)."
         case .noUsableParameters(let name):
-            return "Parameter file \"\(name)\" didn't produce any usable parameters."
+            return "Parameter file \(name) didn't produce any usable parameters."
         }
     }
 }
@@ -134,8 +134,7 @@ enum HslParameterFiles {
 
             let enabled = (field(fields, "Enabled") ?? "TRUE").trimmingCharacters(in: .whitespaces).uppercased() != "FALSE"
 
-            result.append(HslPid(index: result.count,
-                                 name: name,
+            result.append(HslPid(name: name,
                                  unit: (field(fields, "Unit") ?? "").trimmingCharacters(in: .whitespaces),
                                  equation: equation,
                                  address: address,
