@@ -68,6 +68,29 @@ jobs:
             exit 1
           }
 
+          # Guard: fail the build if bundled resources didn't make it into the app.
+          # (A "successful" IPA without these is ~550 KB instead of ~2.8 MB and
+          # flashing / DTC lookup / the app icon silently break.)
+          MISSING=0
+          for f in box_codes.csv \
+                   simos18_1_unlock_patch.bin \
+                   simos18_10_unlock_patch.bin \
+                   simos18_ecm_dtcs.csv \
+                   sae_generic_dtcs.csv \
+                   Assets.car; do
+            if [ ! -e "$APP_PATH/$f" ]; then
+              echo "ERROR: $f is missing from the app bundle"
+              MISSING=1
+            fi
+          done
+          if [ "$MISSING" -ne 0 ]; then
+            echo "Check that these files exist under GETMobile/ in the repo:"
+            echo "  GETMobile/Flash/Data/  (box_codes.csv, simos18_1_unlock_patch.bin, simos18_10_unlock_patch.bin)"
+            echo "  GETMobile/Diagnostics/Data/  (simos18_ecm_dtcs.csv, sae_generic_dtcs.csv)"
+            echo "  GETMobile/Assets.xcassets/  (AccentColor.colorset, AppIcon.appiconset, LogoBanner.imageset)"
+            exit 1
+          fi
+
           rm -rf build/output build/Payload
           mkdir -p build/output build/Payload
           cp -R "$APP_PATH" build/Payload/
