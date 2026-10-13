@@ -33,6 +33,13 @@ targets:
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: "GET Mobile connects to supported Wi-Fi OBD and GVRET bridges on your local network."
         INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "GET Mobile uses Bluetooth to connect to supported diagnostic bridges."
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        # Without a launch screen declared, iOS runs the app in a legacy
+        # "compatibility" mode: the UI is scaled up ("zoomed in") and does not
+        # fit the screen. Xcode flags this in every build log as
+        # "A launch configuration or launch storyboard or xib must be provided".
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO

@@ -61,7 +61,7 @@ extension UdsTransport {
 /// can collect that stream can provide this specialized path.
 @MainActor
 protocol HslRawTransport: AnyObject {
-    func sendHslRequest(_ payload: Data, expectedPayloadBytes: Int, timeoutSeconds: Double) async throws -> Data
+    func sendHslRequest(_ payload: Data, expectedPayloadBytes: Int, timeoutSeconds: Double, frameIntervalSeconds: Double) async throws -> Data
 }
 
 extension UdsTransport {

@@ -23,6 +23,11 @@ final class HslLoggerSession: ObservableObject {
     /// Pause after each completed poll, in ms - the desktop logger's "Poll Delay (ms)"
     /// box (Thread.Sleep(pollDelayMs) after every PollOnce), default 100.
     @Published var pollDelayMs: Int = 100
+    /// Minimum gap, in ms, between the Consecutive Frames of the long HSL
+    /// setup request. 30 is the long-standing safe value for the Wi-Fi bridge;
+    /// 2 matches the ECU's own advertised minimum (what a J2534 adapter does).
+    /// Exposed so the two can be compared on a real ECU.
+    @Published var frameSpacingMs: Int = 30
     @Published var lastError: String?
 
     /// Parameter files the user can pick from: the bundled parameters_3e_<box code>.csv
@@ -363,7 +368,12 @@ final class HslLoggerSession: ObservableObject {
 
     private func sendHsl(_ request: Data, expectedPayloadBytes: Int, timeoutSeconds: Double) async throws -> Data {
         if let hslTransport {
-            return try await hslTransport.sendHslRequest(request, expectedPayloadBytes: expectedPayloadBytes, timeoutSeconds: timeoutSeconds)
+            return try await hslTransport.sendHslRequest(
+                request,
+                expectedPayloadBytes: expectedPayloadBytes,
+                timeoutSeconds: timeoutSeconds,
+                frameIntervalSeconds: Double(max(1, frameSpacingMs)) / 1000.0
+            )
         }
         guard let uds else { throw HslError.noTransport }
         // Non-GVRET transports can use their normal ISO-TP implementation.

@@ -136,6 +136,27 @@ struct DatalogView: View {
             .font(.system(size: 13, weight: .semibold))
             .foregroundColor(.gray)
 
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Frame Spacing (ms)")
+                    Spacer()
+                    Picker("Frame Spacing", selection: $logger.frameSpacingMs) {
+                        ForEach([2, 5, 10, 30, 50], id: \.self) { ms in
+                            Text("\(ms)").tag(ms)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 220)
+                    .disabled(logger.isRunning || logger.isStarting)
+                }
+                Text("Gap between frames when sending the setup list. 30 is the safe default; 2 matches the ECU's own minimum.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.gray)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundColor(.gray)
+
             HStack {
                 Label(logger.isRunning ? "Logging" : "Stopped", systemImage: logger.isRunning ? "circle.fill" : "circle")
                     .foregroundColor(logger.isRunning ? GETTheme.amber : .gray)

@@ -1,0 +1,15 @@
+Name,Unit,Equation,Format,Address,Length,Signed,ProgMin,ProgMax,WarnMin,WarnMax,Smoothing,Enabled,Tabs,Assign To
+Airmass,g/stk,x * 1000,%01.2f,0xd00097b4,4,FALSE,0,2,-100,1000,0,TRUE,Airflow,
+Airmass SP,g/stk,x * 1000,%01.2f,0xd00097fc,4,FALSE,0,2,-100,1000,0,TRUE,Airflow,
+Coolant Temp,°C,(x - 64) / 1.33,%01.0f,0xd000c6f5,1,FALSE,-50,130,-100,150,0.8,TRUE,Misc,
+Engine Speed,rpm,x,%01.0f,0xd0012400,2,FALSE,0,7000,-1,6000,0,TRUE,Default|ROUND|1.WG.Fuel.Airflow.Ignition.Power,rpm
+FP DI,kpa,x / 1.884402603,%01.0f,0xd00136ac,2,FALSE,0,28000,0,28000,0,TRUE,Fuel,
+FP DI SP,kpa,x / 1.8844026039,%01.0f,0xd0013640,2,FALSE,0,28000,-1000,30000,0,TRUE,Fuel,
+Fuel Flow,mg/stk,x / 47.181425486,%01.0f,0xd0013636,2,FALSE,-100,100,-100,1000,0,TRUE,Fuel,
+IAT,°C,(x - 64) / 1.33,%01.1f,0xd000c179,1,FALSE,-50,70,-30,50,0.9,TRUE,Misc.Default|BAR_V|3,
+Ign Table,°,(x - 95) / 2.66667,%01.0f,0xd000e57e,1,FALSE,-5,15,-100,100,0,TRUE,Ignition,
+Lambda,l,x / 32767.999999,%01.2f,0xd00120e2,2,FALSE,0.5,1.5,-0.1,5,0,TRUE,Fuel,
+MAP,kpa,x / 1000,%01.1f,0xd00098cc,4,FALSE,0,300,-300,300,0,TRUE,Airflow,map
+Pedal Pos,%,x / 10.24,%01.1f,0xd0012028,2,FALSE,0,100,-1000,1000,0,TRUE,,pedal
+PUT,kpa,x / 1000,%01.1f,0xd00098fc,4,FALSE,0,300,-1000,300,0,TRUE,Airflow,put
+Torque,Nm,x / 32,%01.1f,0xd0015344,2,TRUE,-40,500,-1000,1000,0,TRUE,Power,tq_rep

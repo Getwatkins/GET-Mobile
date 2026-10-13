@@ -244,17 +244,30 @@ final class IsoTpSession {
     /// permitted by ISO-TP and materially reduces dropped CFs on this bridge.
     /// Note: a Flow Control frame `30 00 02` means BS=0 (unlimited) and
     /// STmin=2 ms. It does NOT mean BS=2.
-    func sendHsl(_ payload: [UInt8], txID: UInt32, timeoutSeconds: Double) async throws {
-        // V63 HSL ENGINE MARKER.
-        // If this line does not appear in the phone debug log, the installed
-        // IPA was not built from the corrected HSL sender.
+    ///
+    /// `frameInterval` is that floor, in seconds. The HSL screen lets the user
+    /// pick it (2...50 ms) so frame spacing can be compared on a real ECU.
+    /// The returned stats report what actually happened on the wire.
+    @discardableResult
+    func sendHsl(_ payload: [UInt8],
+                 txID: UInt32,
+                 timeoutSeconds: Double,
+                 frameInterval: Double = IsoTp.minimumSendIntervalSeconds) async throws -> HslSendStats {
+        var stats = HslSendStats()
+        stats.intervalMs = Int((frameInterval * 1000.0).rounded())
+        let started = Date()
+        var lastConsecutiveSend: Date?
+
         if let single = IsoTp.buildSingleFrame(payload) {
             try await sendFrame(txID, single)
-            return
+            stats.frames = 1
+            stats.elapsedMs = Int(Date().timeIntervalSince(started) * 1000.0)
+            return stats
         }
 
         let (first, consecutive) = IsoTp.segmentMultiFrame(payload)
         try await sendFrame(txID, first)
+        stats.frames = 1
 
         var remaining = consecutive[...]
         let deadline = Date().addingTimeInterval(timeoutSeconds)
@@ -291,9 +304,10 @@ final class IsoTpSession {
                     ? remaining.count
                     : min(Int(blockSize), remaining.count)
 
+                stats.stMinMs = Int((IsoTp.stMinToSeconds(stMin) * 1000.0).rounded())
                 let delay = max(
                     IsoTp.stMinToSeconds(stMin),
-                    IsoTp.minimumSendIntervalSeconds
+                    frameInterval
                 )
 
                 for _ in 0..<count {
@@ -318,6 +332,12 @@ final class IsoTpSession {
                     }
 
                     try await sendFrame(txID, frame)
+                    let sentAt = Date()
+                    if let previous = lastConsecutiveSend {
+                        stats.maxGapMs = max(stats.maxGapMs, Int(sentAt.timeIntervalSince(previous) * 1000.0))
+                    }
+                    lastConsecutiveSend = sentAt
+                    stats.frames += 1
                     remaining = remaining.dropFirst()
                     expectedSequence = expectedSequence == 15 ? 0 : expectedSequence + 1
                 }
@@ -341,6 +361,8 @@ final class IsoTpSession {
         // Keep the value live for diagnostics/debugger inspection and prevent
         // future optimization from making it disappear during debugging.
         _ = flowControlCount
+        stats.elapsedMs = Int(Date().timeIntervalSince(started) * 1000.0)
+        return stats
     }
 
     /// Receives one full UDS message on `rxID` (as filtered by the caller's
@@ -374,4 +396,18 @@ final class IsoTpSession {
             throw IsoTpError.unexpectedFrame
         }
     }
+}
+
+/// What `IsoTpSession.sendHsl` actually did on the wire (for the debug log).
+struct HslSendStats {
+    /// First Frame + Consecutive Frames sent (1 for a single-frame request).
+    var frames = 0
+    /// Total time from first frame sent to last frame sent.
+    var elapsedMs = 0
+    /// Longest gap between two consecutive Consecutive Frames.
+    var maxGapMs = 0
+    /// Spacing floor that was requested.
+    var intervalMs = 0
+    /// STmin the ECU advertised in its Flow Control frame.
+    var stMinMs = 0
 }

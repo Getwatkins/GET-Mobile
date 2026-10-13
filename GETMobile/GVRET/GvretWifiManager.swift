@@ -205,8 +205,14 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         }
     }
 
+    private static let logTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm:ss.SSS a"
+        return formatter
+    }()
+
     private func log(_ message: String) {
-        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        let timestamp = Self.logTimeFormatter.string(from: Date())
         debugLog.append("[\(timestamp)] \(message)")
         if debugLog.count > 500 { debugLog.removeFirst(debugLog.count - 500) }
     }
@@ -322,7 +328,10 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     /// de-framed UDS payload, so GET Mobile must do the same by using the
     /// existing IsoTpSession for both transmit and receive. This also allows
     /// HSL samples larger than one CAN frame to be received correctly.
-    func sendHslRequest(_ payload: Data, expectedPayloadBytes: Int, timeoutSeconds: Double = 6.0) async throws -> Data {
+    func sendHslRequest(_ payload: Data,
+                        expectedPayloadBytes: Int,
+                        timeoutSeconds: Double = 6.0,
+                        frameIntervalSeconds: Double = IsoTp.minimumSendIntervalSeconds) async throws -> Data {
         guard hslExclusive else { throw GvretHslError.transportNotExclusive }
         guard state == .ready else { throw GvretError.notReady }
         guard !hslRequestInFlight else { throw GvretHslError.requestBusy }
@@ -343,9 +352,15 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
         // must send two CFs and then wait for the next FC rather than blasting
         // the entire request. A J2534/OpenPort channel handles this inside its
         // ISO15765 driver; raw A0/GVRET CAN requires us to do it here.
-        log("HSL ISO-TP ENGINE: V63-BS2-CORRECTED")
+        log("HSL ISO-TP ENGINE: V67-SPACING (frame spacing floor \(Int((frameIntervalSeconds * 1000.0).rounded())) ms)")
         log("HSL ISO-TP: transmitting request and waiting for ECU Flow Control...")
-        try await isoTp.sendHsl([UInt8](payload), txID: UInt32(BridgeProtocol.simos18RequestID), timeoutSeconds: timeoutSeconds)
+        let sendStats = try await isoTp.sendHsl(
+            [UInt8](payload),
+            txID: UInt32(BridgeProtocol.simos18RequestID),
+            timeoutSeconds: timeoutSeconds,
+            frameInterval: frameIntervalSeconds
+        )
+        log("HSL ISO-TP TX summary: frames=\(sendStats.frames) elapsed=\(sendStats.elapsedMs) ms, ECU STmin=\(sendStats.stMinMs) ms, spacing floor=\(sendStats.intervalMs) ms, longest gap between consecutive frames=\(sendStats.maxGapMs) ms")
         log("HSL ISO-TP: request transmission complete; waiting for ECU response...")
         let response = try await isoTp.receive(
             rxID: UInt32(BridgeProtocol.simos18ResponseID),
