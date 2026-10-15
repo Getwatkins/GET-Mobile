@@ -47,13 +47,13 @@ enum IsoTp {
     /// else, including the CBOOT-patch write path (PatchBlockRunner), which
     /// is left alone on purpose.
     ///
-    /// History: 5ms -> 3ms -> 2ms -> 1ms, each step only after real CAL
-    /// flashes completed cleanly at the previous value on the target
-    /// hardware. 1ms is close to a typical ECU-requested STmin territory -
-    /// treat this as the last reasonable step down, not a new baseline to
-    /// keep pushing from. The ECU's own requested STmin still wins
-    /// whenever it's larger - see IsoTpSession.send.
-    static let minimumFlashTransferIntervalSeconds: Double = 0.001
+    /// History: 5ms -> 3ms -> 2ms -> 1ms -> 0ms. 0 means "no extra floor":
+    /// consecutive frames are spaced purely by the STmin the ECU asks for in
+    /// its Flow Control frame (see IsoTpSession.send). That is the protocol-
+    /// correct limit - there is nothing faster to step down to. Each frame is
+    /// still individually handed to the bridge (awaited), so the bridge's TCP
+    /// buffer cannot be overrun.
+    static let minimumFlashTransferIntervalSeconds: Double = 0.0
 
     enum ParsedFrame: Equatable {
         case singleFrame(data: [UInt8])
@@ -225,7 +225,9 @@ final class IsoTpSession {
             // remaining message. A non-zero block size requires another FC
             // after that many consecutive frames. Keep the distinction exact.
             for _ in 0..<min(batchSize, remaining.count) {
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
                 try await sendFrame(txID, remaining.first!)
                 remaining = remaining.dropFirst()
             }

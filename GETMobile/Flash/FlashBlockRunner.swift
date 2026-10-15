@@ -50,8 +50,8 @@ enum FlashBlockRunner {
         // over the A0's WiFi bridge - see IsoTp.minimumSendIntervalSeconds).
         // A CAL block is ~75,000 frames, so that floor alone was ~25 minutes.
         // This loop overrides it with IsoTp.minimumFlashTransferIntervalSeconds
-        // (currently 2ms, stepped down from 5ms -> 3ms -> 2ms only after
-        // clean real-world flashes at each step) and restores the 20ms
+        // (currently 0 = the ECU's own STmin only; it was stepped down
+        // 5ms -> 3ms -> 2ms -> 1ms -> 0) and restores the 20ms
         // default the moment the loop ends. The ECU's own STmin still wins
         // when larger. NOT applied to PatchBlockRunner (CBOOT unlock patch)
         // or to any TCM flash - see useFastPacing.

@@ -292,7 +292,11 @@ final class GvretWifiManager: NSObject, ObservableObject, UdsTransport, HslRawTr
     func setBulkTransferPacing(_ intervalSeconds: Double?) {
         bulkTransferPacingOverride = intervalSeconds
         if let intervalSeconds {
-            log("Bulk transfer pacing override active: \(Int(intervalSeconds * 1000))ms minimum between consecutive frames.")
+            if intervalSeconds <= 0 {
+                log("Bulk transfer pacing override active: no extra floor - frames paced by the ECU's own STmin only.")
+            } else {
+                log("Bulk transfer pacing override active: \(Int(intervalSeconds * 1000))ms minimum between consecutive frames.")
+            }
         } else {
             log("Bulk transfer pacing override cleared - back to the normal \(Int(IsoTp.minimumSendIntervalSeconds * 1000))ms floor.")
         }
