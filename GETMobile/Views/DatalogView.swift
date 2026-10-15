@@ -263,7 +263,8 @@ struct DatalogView: View {
         }
         let polled = logger.parameters.filter { !$0.isVirtual }.count
         let calculated = logger.parameters.count - polled
-        return "\(logger.parameters.count) parameters in this file (\(polled) read from the ECU, \(calculated) calculated)."
+        let requestBytes = polled * 5 + 9
+        return "\(logger.parameters.count) parameters in this file (\(polled) read from the ECU, \(calculated) calculated). Setup request: \(requestBytes) bytes."
     }
 
     private var currentValues: some View {

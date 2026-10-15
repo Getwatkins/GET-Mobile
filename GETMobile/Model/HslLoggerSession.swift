@@ -24,10 +24,10 @@ final class HslLoggerSession: ObservableObject {
     /// box (Thread.Sleep(pollDelayMs) after every PollOnce), default 100.
     @Published var pollDelayMs: Int = 100
     /// Minimum gap, in ms, between the Consecutive Frames of the long HSL
-    /// setup request. 30 is the long-standing safe value for the Wi-Fi bridge;
-    /// 2 matches the ECU's own advertised minimum (what a J2534 adapter does).
-    /// Exposed so the two can be compared on a real ECU.
-    @Published var frameSpacingMs: Int = 30
+    /// setup request. 2 matches the ECU's own advertised minimum (what a J2534
+    /// adapter does) and is the value that got the ECU to acknowledge setup in
+    /// real-device testing (v67 log). 30 is the older, more conservative value.
+    @Published var frameSpacingMs: Int = 2
     @Published var lastError: String?
 
     /// Parameter files the user can pick from: the bundled parameters_3e_<box code>.csv
@@ -245,12 +245,30 @@ final class HslLoggerSession: ObservableObject {
     }
 
     private func configureHsl() async throws {
-        // One 3E02 setup request, one attempt - same as the desktop logger. There is
-        // deliberately no fallback list and no retry loop: re-sending 3E02 can leave a
-        // patched ECU in an ambiguous HSL state, and a hardcoded fallback list would
+        // The same 3E02 setup request is sent at most TWICE, never with a different
+        // list: there is deliberately no fallback list, because a hardcoded one would
         // use addresses that only match one ECU software version.
+        //
+        // Why a second attempt: on a real ECU (v67 log, 14-channel list) the first
+        // setup after a failed or aborted attempt got no acknowledgement and an
+        // immediate second identical attempt succeeded. Doing that automatically
+        // saves pressing Start twice.
         guard !pids.isEmpty else { throw HslError.noChannels }
-        try await sendHslSetup(for: pids)
+        let listBytes = pids.count * 5 + 1
+        do {
+            try await sendHslSetup(for: pids)
+            return
+        } catch {
+            try Task.checkCancellation()
+            print("HSL setup attempt 1 failed (\(error.localizedDescription)) - retrying once")
+        }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        do {
+            try await sendHslSetup(for: pids)
+        } catch {
+            try Task.checkCancellation()
+            throw HslError.setupFailed(channels: pids.count, listBytes: listBytes, reason: error.localizedDescription)
+        }
     }
 
     private func sendHslSetup(for setupPids: [HslPid]) async throws {
@@ -360,7 +378,7 @@ final class HslLoggerSession: ObservableObject {
     /// single 3E04 poll. Give the setup phase much more room than a poll needs, since
     /// a slow-but-eventually-successful ack is a very different failure than a
     /// wedged connection.
-    private let hslSetupTimeoutSeconds: Double = 15.0
+    private let hslSetupTimeoutSeconds: Double = 10.0
     /// Each 3E04 poll only reads back the already-built list - much
     /// smaller/faster than setup - so it keeps a short timeout so a single
     /// dropped poll doesn't stall the whole logging loop for 15s.
@@ -504,6 +522,7 @@ final class HslLoggerSession: ObservableObject {
 
     enum HslError: Error, LocalizedError {
         case invalidSetupResponse(String)
+        case setupFailed(channels: Int, listBytes: Int, reason: String)
         case invalidPollResponse(String)
         case shortPollResponse(expectedAtLeast: Int, got: Int)
         case invalidNumericValue(pid: String, reason: String)
@@ -514,6 +533,8 @@ final class HslLoggerSession: ObservableObject {
         var errorDescription: String? {
             switch self {
             case .invalidSetupResponse(let value): return "HSL setup failed. ECU response: \(value)"
+            case .setupFailed(let channels, let listBytes, let reason):
+                return "The ECU did not accept the HSL setup after 2 attempts (\(channels) channels, \(listBytes)-byte list): \(reason). A 14-channel list is known to work on this ECU - try a shorter parameter file."
             case .invalidPollResponse(let value): return "HSL read returned an unexpected response: \(value)"
             case .shortPollResponse(let expected, let got): return "HSL response was short: expected at least \(expected) bytes, received \(got)."
             case .invalidNumericValue(let pid, let reason): return "HSL decode rejected \(pid): \(reason)."
