@@ -29,6 +29,14 @@ protocol UdsTransport: AnyObject {
     /// their own firmware/adapter and have nothing to override, so they
     /// get the no-op default below for free. Pass nil to restore the
     /// transport's normal default pacing.
+    ///
+    /// IMPORTANT: this MUST be a protocol requirement (not just an extension
+    /// default). `UdsClient` calls it through the `UdsTransport` existential;
+    /// if it is only declared in the extension below, Swift binds the call to
+    /// the extension's no-op and GvretWifiManager's real implementation is
+    /// never reached - the fast flash pacing then silently never applies.
+    func setBulkTransferPacing(_ intervalSeconds: Double?)
+
     /// Immediately abandons whatever ISO-TP wait is currently in flight,
     /// resolving it as if it had timed out, and frees the transport for a
     /// new caller. Exists because Task cancellation does NOT interrupt a
