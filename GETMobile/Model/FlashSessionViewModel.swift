@@ -4,16 +4,41 @@ enum FlashMode: String, CaseIterable, Identifiable {
     case unlockFlash = "Unlock + Flash"
     case normalFlash = "Normal Flash"
     case calOnlyFlash = "CAL-Only Flash"
+    case stockRelock = "Flash Stock / Re-Lock"
     var id: String { rawValue }
+
+    /// Mirrors the desktop app exactly (Simos18FlashingControl:
+    /// `ShouldPatchCboot = flashMode == 0 || flashMode == 1`): Unlock and Normal
+    /// flashes MUST write a patched CBOOT. If a full flash writes the file's
+    /// unpatched CBOOT while the tune's ASW/CAL are modified, the bootloader
+    /// rejects them and the ECU stays stuck in flash mode after the reset.
+    /// Stock Relock deliberately does NOT patch (that is what re-locks the ECU),
+    /// and CAL-only never touches CBOOT.
+    var patchesCboot: Bool {
+        switch self {
+        case .unlockFlash, .normalFlash: return true
+        case .calOnlyFlash, .stockRelock: return false
+        }
+    }
+
+    var cbootStatus: String {
+        switch self {
+        case .unlockFlash, .normalFlash: return "CBOOT: patched automatically (ECU stays unlocked)."
+        case .calOnlyFlash: return "CBOOT: not touched."
+        case .stockRelock: return "CBOOT: NOT patched - the ECU is re-locked to stock."
+        }
+    }
 
     var explanation: String {
         switch self {
         case .unlockFlash:
-            return "First-time unlock on a factory ECU. Requires the untouched factory .bin matching this ECU's exact box code (not a tune) - it gets patched to perform the unlock, then all 5 blocks are written."
+            return "First-time unlock on a factory ECU. Requires the untouched factory .bin matching this ECU's exact box code (not a tune) - it gets patched to perform the unlock, then all 5 blocks are written with a patched CBOOT."
         case .normalFlash:
-            return "Writes all 5 blocks. Use this for a full tune flash on an ECU that's already been unlocked."
+            return "Writes all 5 blocks (CBOOT is patched automatically). Use this for a full tune flash on an ECU that's already been unlocked."
         case .calOnlyFlash:
             return "Writes only the CAL block - much faster. Requires the file's CAL to match the ECU's currently installed box code exactly (checked automatically before writing anything)."
+        case .stockRelock:
+            return "Writes all 5 blocks from the unmodified factory .bin and re-locks the ECU (CBOOT is NOT patched). Any tune on the ECU is removed."
         }
     }
 }
@@ -35,7 +60,9 @@ final class FlashSessionViewModel: ObservableObject {
 
     @Published var moduleType: Simos18ModuleType = .simos18_1
     @Published var flashMode: FlashMode = .normalFlash
-    @Published var shouldPatchCboot: Bool = false
+    /// Derived from the Flash Mode (same rule as the desktop app) - no longer a
+    /// manual toggle, because a wrong value silently leaves the ECU in flash mode.
+    var shouldPatchCboot: Bool { flashMode.patchesCboot }
 
     @Published var selectedFileName: String?
     @Published private(set) var loadedBlocks: [Int: [UInt8]]?
@@ -120,13 +147,18 @@ final class FlashSessionViewModel: ObservableObject {
         finalError = nil
         logLines.removeAll()
         currentStep = ""; currentStatus = ""; currentProgress = 0
+        if flashTarget == .ecm {
+            appendLog("Flash mode: \(flashMode.rawValue). \(flashMode.cbootStatus)")
+        }
 
         var options = Simos18FlashOptions(moduleType: moduleType)
         options.shouldPatchCboot = shouldPatchCboot
         switch flashMode {
         case .unlockFlash: options.frfBlocksForUnlock = blocks
-        case .normalFlash: options.inputBlocksForNormalFlash = blocks
         case .calOnlyFlash: options.inputBlocksForCalFlash = blocks
+        // Normal and Stock Relock are the same full 5-block path and differ only
+        // in shouldPatchCboot (see FlashMode.patchesCboot) - same as the desktop.
+        case .normalFlash, .stockRelock: options.inputBlocksForNormalFlash = blocks
         }
 
         flashTask = Task { [weak self] in

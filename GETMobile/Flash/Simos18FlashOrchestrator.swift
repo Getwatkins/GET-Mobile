@@ -281,18 +281,27 @@ enum Simos18FlashOrchestrator {
         // exactly the kind of thing that could push someone into an
         // unnecessary, risky recovery attempt. Match Python's behavior:
         // never let a failure here mask an otherwise-successful flash.
+        var ecuAnsweredAfterReset = true
         do {
             try await client.ecuReset(.hardReset)
             logDetail?("Sending 0x4 Clear Emissions DTCs over OBD-2")
             _ = try await transport.sendRequest(rxID: 0x7E8, txID: 0x700, payload: Data([0x04]), timeoutSeconds: 5)
         } catch {
+            ecuAnsweredAfterReset = false
             logDetail?("Reset/clear-DTCs step reported an error (\(error.localizedDescription)) - "
                 + "expected sometimes since the ECU is rebooting and may not answer in time. "
                 + "The actual flash write and checksum above already succeeded, so this on its "
                 + "own is NOT a flash failure.")
         }
 
-        statusCallback?("SETUP", "DONE!...", 100)
+        if ecuAnsweredAfterReset {
+            statusCallback?("SETUP", "DONE!...", 100)
+        } else {
+            // Not a flash failure (see above) - but "DONE" with no hint made a
+            // stuck ECU look fine. Say so, and say what to check.
+            statusCallback?("SETUP", "DONE - flash written and verified. The ECU did not answer after the reset (can be normal while it reboots). Turn the ignition off ~10 s, then on, and confirm it starts. If it stays in flash mode, check the Flash Mode matches the file (Unlock and Normal patch CBOOT; Stock Relock does not).", 100)
+            logDetail?("NOTE: no answer from the ECU after reset - verify it left flash mode.")
+        }
         logDetail?("Done!")
     }
 }

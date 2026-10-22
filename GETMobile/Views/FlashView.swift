@@ -163,17 +163,16 @@ struct FlashView: View {
                         Text(mode.rawValue).tag(mode)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.menu)
+                .tint(GETTheme.amber)
 
                 Text(session.flashMode.explanation)
                     .font(.system(size: 12))
                     .foregroundColor(.gray)
-            }
 
-            if session.flashMode == .unlockFlash {
-                Toggle("Patch CBOOT into sample mode", isOn: $session.shouldPatchCboot)
-                    .tint(GETTheme.amber)
-                    .font(.system(size: 14))
+                Text(session.flashMode.cbootStatus)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(session.flashMode == .stockRelock ? GETTheme.warningRed : GETTheme.amber)
             }
         }
     }
