@@ -12,14 +12,13 @@ targets:
   GETMobile:
     type: application
     platform: iOS
-    # Everything under GETMobile/ is picked up automatically: .swift files are
-    # compiled; Assets.xcassets (-> Assets.car), the *.csv data files and the
-    # *.bin unlock patches are copied into the app bundle as resources.
+    # Keep every file under GETMobile/ in the app bundle. XcodeGen picks up
+    # .swift sources and bundled resources automatically; do not add a
+    # `resources:` key and do not exclude the asset/data directories.
     #
-    # NOTE: do not exclude Assets.xcassets / Flash/Data / Diagnostics/Data here and
-    # do not add a `resources:` key - XcodeGen has no such target key, it is
-    # silently ignored, and the excluded files then never make it into the app
-    # (this is what shrank the IPA from ~2.8 MB to ~0.5 MB).
+    # Excluding Assets.xcassets / Flash/Data / Diagnostics/Data shrinks the IPA
+    # (e.g. from ~2.8 MB to ~0.5 MB) and makes required runtime files like
+    # box_codes.csv, patch binaries, and Assets.car disappear from GETMobile.app.
     sources:
       - path: GETMobile
         excludes:
