@@ -102,6 +102,18 @@ jobs:
             exit 1
           fi
 
+          # CarPlay scene must be declared in the built Info.plist.
+          /usr/libexec/PlistBuddy -c "Print :UIApplicationSceneManifest:UISceneConfigurations:CPTemplateApplicationSceneSessionRoleApplication:0:UISceneDelegateClassName" \
+            "$APP_PATH/Info.plist" || {
+            echo "ERROR: CarPlay scene is missing from the built Info.plist"
+            exit 1
+          }
+          # Custom icon + CarPlay tab artwork must be in the compiled asset catalog.
+          xcrun --sdk iphoneos assetutil --info "$APP_PATH/Assets.car" > build/assets.json
+          for n in IconGauge IconLog IconDiag IconFlash TabGauge TabLog TabDiag TabFlash; do
+            grep -q "\"$n\"" build/assets.json || { echo "ERROR: asset $n missing from Assets.car"; exit 1; }
+          done
+
           rm -rf build/output build/Payload
           mkdir -p build/output build/Payload
           cp -R "$APP_PATH" build/Payload/
