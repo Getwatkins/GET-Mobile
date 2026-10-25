@@ -51,6 +51,10 @@ struct HomeMenuView: View {
                         path.append(.logging)
                     }
 
+                    tile(title: "Performance", imageName: "IconPerf", tint: GETTheme.gold) {
+                        path.append(.performance)
+                    }
+
                     if transport != nil, !session.isDemoMode {
                         tile(title: "Diagnostics", imageName: "IconDiag", tint: GETTheme.gold) {
                             session.stopLive()
