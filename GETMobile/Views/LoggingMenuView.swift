@@ -27,7 +27,7 @@ struct LoggingMenuView: View {
                     .padding(.top, 12)
 
                 LazyVGrid(columns: [GridItem(.fixed(tileWidth), spacing: 0), GridItem(.fixed(tileWidth), spacing: 0)], spacing: 0) {
-                    tile(title: "HSL Datalogger", systemImage: "waveform.path.ecg", tint: GETTheme.amber) {
+                    tile(title: "HSL Datalogger", imageName: "IconHsl", tint: GETTheme.amber) {
                         // Acquire the ownership lock BEFORE navigating, same as
                         // before: closes the small window where another view
                         // update could restart normal gauge polling.
@@ -35,7 +35,7 @@ struct LoggingMenuView: View {
                         path.append(.hslDatalog)
                     }
 
-                    tile(title: "Standard Logger", systemImage: "tablecells", tint: GETTheme.gold) {
+                    tile(title: "Standard Logger", imageName: "IconLog", tint: GETTheme.gold) {
                         session.beginHslLogging()
                         path.append(.standardDatalog)
                     }
@@ -50,12 +50,14 @@ struct LoggingMenuView: View {
         .withTopLogo()
     }
 
-    private func tile(title: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
+    private func tile(title: String, imageName: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 16) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 56))
-                    .foregroundColor(tint)
+                Image(imageName)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 96, height: 96)
                 Text(title)
                     .font(.system(size: 22, weight: .bold))
                     .foregroundColor(.white)

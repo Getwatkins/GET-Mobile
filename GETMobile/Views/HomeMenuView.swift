@@ -43,21 +43,25 @@ struct HomeMenuView: View {
                 // .flexible()) so there's no rounding gap between the two
                 // columns or at the screen edges.
                 LazyVGrid(columns: [GridItem(.fixed(tileWidth), spacing: 0), GridItem(.fixed(tileWidth), spacing: 0)], spacing: 0) {
-                    tile(title: "Gauges", systemImage: "gauge.with.dots.needle.67percent", tint: GETTheme.amber) {
+                    tile(title: "Gauges", imageName: "IconGauge", tint: GETTheme.amber) {
                         path.append(.gauges)
                     }
 
-                    tile(title: "Logging", systemImage: "waveform.path.ecg", tint: GETTheme.gold) {
+                    tile(title: "Logging", imageName: "IconLog", tint: GETTheme.gold) {
                         path.append(.logging)
                     }
 
+                    tile(title: "Performance", imageName: "IconPerf", tint: GETTheme.gold) {
+                        path.append(.performance)
+                    }
+
                     if transport != nil, !session.isDemoMode {
-                        tile(title: "Diagnostics", systemImage: "wrench.and.screwdriver", tint: GETTheme.gold) {
+                        tile(title: "Diagnostics", imageName: "IconDiag", tint: GETTheme.gold) {
                             session.stopLive()
                             path.append(.diagnostics)
                         }
 
-                        tile(title: "Flash ECU", systemImage: "bolt.fill", tint: GETTheme.warningRed) {
+                        tile(title: "Flash ECU", imageName: "IconFlash", tint: GETTheme.warningRed) {
                             session.stopLive()
                             path.append(.flash)
                         }
@@ -86,12 +90,16 @@ struct HomeMenuView: View {
         .withTopLogo()
     }
 
-    private func tile(title: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
+    private func tile(title: String, imageName: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 16) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 56))
-                    .foregroundColor(tint)
+                // Custom artwork (Assets.xcassets/Icon*.imageset), shared with
+                // the CarPlay screens.
+                Image(imageName)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 96, height: 96)
                 Text(title)
                     .font(.system(size: 22, weight: .bold))
                     .foregroundColor(.white)
