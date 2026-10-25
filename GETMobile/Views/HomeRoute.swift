@@ -9,6 +9,7 @@ enum HomeRoute: Hashable {
     case logging
     case diagnostics
     case flash
+    case performance
     case hslDatalog
     case standardDatalog
 }

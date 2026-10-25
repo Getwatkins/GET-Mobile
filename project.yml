@@ -24,13 +24,35 @@ targets:
       - path: GETMobile
         excludes:
           - "**/*.md"
+    # CarPlay (Driving Task category). The scene manifest cannot be expressed as
+    # INFOPLIST_KEY_* build settings, so it goes in a generated Info.plist that
+    # Xcode merges with the generated keys below. Only the CarPlay role is
+    # declared - the phone UI stays the SwiftUI WindowGroup.
+    info:
+      path: Config/Info.plist
+      properties:
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+          UISceneConfigurations:
+            CPTemplateApplicationSceneSessionRoleApplication:
+              - UISceneClassName: CPTemplateApplicationScene
+                UISceneConfigurationName: CarPlay
+                UISceneDelegateClassName: CarPlaySceneDelegate
+    # Needs an Apple-approved CarPlay entitlement in the signing profile to
+    # actually show up in a car - see GETMobile/V72_CARPLAY_NOTES.md.
+    entitlements:
+      path: Config/GETMobile.entitlements
+      properties:
+        com.apple.developer.carplay-driving-task: true
     settings:
       base:
+        CODE_SIGN_ENTITLEMENTS: Config/GETMobile.entitlements
         PRODUCT_BUNDLE_IDENTIFIER: com.getwatkins.getmobile
         PRODUCT_NAME: GETMobile
         INFOPLIST_KEY_CFBundleDisplayName: GET Mobile
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: "GET Mobile connects to supported Wi-Fi OBD and GVRET bridges on your local network."
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "GET Mobile uses GPS speed and distance for the Performance timer (0-60, 1/4 mile and more)."
         INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "GET Mobile uses Bluetooth to connect to supported diagnostic bridges."
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         # Without a launch screen declared, iOS runs the app in a legacy

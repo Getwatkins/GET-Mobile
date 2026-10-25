@@ -1,41 +1,32 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var bridge = BridgeManager()
-    @StateObject private var elm327Wifi = Elm327WifiManager()
-    @StateObject private var elm327Bluetooth = Elm327BluetoothManager()
-    @StateObject private var gvretWifi = GvretWifiManager()
-    @StateObject private var session = GaugeSessionViewModel()
-    @StateObject private var flashSession = FlashSessionViewModel()
-    @StateObject private var hslLogger = HslLoggerSession()
-    @StateObject private var didLogger = DidLoggerSession()
-    @StateObject private var diagnostics = DiagnosticsSession()
+    // All sessions live in AppModel so the CarPlay scene shares them.
+    @StateObject private var app = AppModel.shared
 
-    @State private var demoModeActive = false
-    @State private var activeKind: ConnectionKind?
     @State private var path: [HomeRoute] = []
+    @State private var showStandalonePerformance = false
 
-    private var isConnectedReady: Bool {
-        switch activeKind {
-        case .esp32Bridge: return bridge.state == .ready
-        case .elm327Wifi: return elm327Wifi.state == .ready
-        case .elm327Bluetooth: return elm327Bluetooth.state == .ready
-        case .gvretWifi: return gvretWifi.state == .ready
-        case .none: return false
-        }
-    }
+    private var bridge: BridgeManager { app.bridge }
+    private var elm327Wifi: Elm327WifiManager { app.elm327Wifi }
+    private var elm327Bluetooth: Elm327BluetoothManager { app.elm327Bluetooth }
+    private var gvretWifi: GvretWifiManager { app.gvretWifi }
+    private var session: GaugeSessionViewModel { app.session }
+    private var flashSession: FlashSessionViewModel { app.flashSession }
+    private var hslLogger: HslLoggerSession { app.hslLogger }
+    private var didLogger: DidLoggerSession { app.didLogger }
+    private var diagnostics: DiagnosticsSession { app.diagnostics }
 
-    /// nil in demo mode (there's no real hardware to flash against) or
-    /// before any transport has connected.
-    private var activeTransport: UdsTransport? {
-        switch activeKind {
-        case .esp32Bridge: return bridge
-        case .elm327Wifi: return elm327Wifi
-        case .elm327Bluetooth: return elm327Bluetooth
-        case .gvretWifi: return gvretWifi
-        case .none: return nil
-        }
+    private var demoModeActive: Bool {
+        get { app.demoModeActive }
+        nonmutating set { app.demoModeActive = newValue }
     }
+    private var activeKind: ConnectionKind? {
+        get { app.activeKind }
+        nonmutating set { app.activeKind = newValue }
+    }
+    private var isConnectedReady: Bool { app.isConnectedReady }
+    private var activeTransport: UdsTransport? { app.activeTransport }
 
     var body: some View {
         Group {
@@ -47,7 +38,7 @@ struct ContentView: View {
                 NavigationStack(path: $path) {
                     HomeMenuView(
                         session: session,
-                        demoModeActive: $demoModeActive,
+                        demoModeActive: $app.demoModeActive,
                         transport: activeTransport,
                         onDisconnect: disconnectActive,
                         path: $path
@@ -78,6 +69,36 @@ struct ContentView: View {
                         demoModeActive = true
                     }
                 )
+                // Performance timing works from GPS alone - no ECU connection needed.
+                .safeAreaInset(edge: .bottom) {
+                    Button {
+                        showStandalonePerformance = true
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image("IconPerf").resizable().scaledToFit().frame(width: 30, height: 30)
+                            Text("Performance (GPS) — no ECU needed")
+                                .font(.system(size: 15, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color(white: 0.12))
+                        .foregroundColor(GETTheme.gold)
+                        .cornerRadius(12)
+                        .padding(.horizontal)
+                        .padding(.bottom, 6)
+                    }
+                }
+                .fullScreenCover(isPresented: $showStandalonePerformance) {
+                    NavigationStack {
+                        PerformanceView(perf: app.performance)
+                            .toolbar {
+                                ToolbarItem(placement: .navigationBarLeading) {
+                                    Button("Done") { showStandalonePerformance = false }
+                                }
+                            }
+                    }
+                    .preferredColorScheme(.dark)
+                }
             }
         }
         .preferredColorScheme(.dark)
@@ -88,6 +109,8 @@ struct ContentView: View {
         switch route {
         case .gauges:
             GaugesOnlyView(session: session)
+        case .performance:
+            PerformanceView(perf: app.performance)
         case .logging:
             if let transport = activeTransport {
                 LoggingMenuView(session: session, transport: transport, path: $path)
@@ -122,19 +145,7 @@ struct ContentView: View {
     }
 
     private func disconnectActive() {
-        session.stopLive()
-        diagnostics.reset()
-        session.detach()
-        switch activeKind {
-        case .esp32Bridge: bridge.disconnect()
-        case .elm327Wifi: elm327Wifi.disconnect()
-        case .elm327Bluetooth: elm327Bluetooth.disconnect()
-        case .gvretWifi: gvretWifi.disconnect()
-        case .none: break
-        }
-        activeKind = nil
-        demoModeActive = false
-        session.isDemoMode = false
+        app.disconnectActive()
         path.removeAll()
     }
 }
