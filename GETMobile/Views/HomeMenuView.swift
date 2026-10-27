@@ -51,19 +51,15 @@ struct HomeMenuView: View {
                         path.append(.logging)
                     }
 
-                    tile(title: "Performance", imageName: "IconPerf", tint: GETTheme.gold) {
-                        path.append(.performance)
-                    }
-
                     if transport != nil, !session.isDemoMode {
-                        tile(title: "Diagnostics", imageName: "IconDiag", tint: GETTheme.gold) {
-                            session.stopLive()
-                            path.append(.diagnostics)
-                        }
-
                         tile(title: "Flash ECU", imageName: "IconFlash", tint: GETTheme.warningRed) {
                             session.stopLive()
                             path.append(.flash)
+                        }
+
+                        tile(title: "Diagnostics", imageName: "IconDiag", tint: GETTheme.gold) {
+                            session.stopLive()
+                            path.append(.diagnostics)
                         }
                     }
                 }
