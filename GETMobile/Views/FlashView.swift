@@ -158,13 +158,31 @@ struct FlashView: View {
             }
 
             labeledSection(title: "Flash Mode") {
-                Picker("Mode", selection: $session.flashMode) {
-                    ForEach(FlashMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
+                // Large, full-width selector box (the plain .menu picker was a
+                // tiny target). The Picker inside the Menu keeps the checkmark.
+                Menu {
+                    Picker("Mode", selection: $session.flashMode) {
+                        ForEach(FlashMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
                     }
+                } label: {
+                    HStack {
+                        Text(session.flashMode.rawValue)
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.leading)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(GETTheme.amber)
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity, minHeight: 60)
+                    .background(GETTheme.panelBackground)
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(GETTheme.amber.opacity(0.7), lineWidth: 1.5))
+                    .cornerRadius(10)
                 }
-                .pickerStyle(.menu)
-                .tint(GETTheme.amber)
 
                 Text(session.flashMode.explanation)
                     .font(.system(size: 12))

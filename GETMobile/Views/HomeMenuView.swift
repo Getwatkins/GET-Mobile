@@ -25,7 +25,10 @@ struct HomeMenuView: View {
     // taller than the box once wrapped, and get its bottom sliced off.
     // A fixed height with real headroom means that can't happen.
     private var tileWidth: CGFloat { UIScreen.main.bounds.width / 2 }
-    private var tileHeight: CGFloat { UIScreen.main.bounds.height * 0.30 }
+    // Sized so all three rows (Gauges/Logging, Flash/Diagnostics, Performance)
+    // fit on screen together: screen height minus the logo/nav area and the
+    // home-indicator inset, split three ways.
+    private var tileHeight: CGFloat { max(150, (UIScreen.main.bounds.height - 200) / 3) }
 
     var body: some View {
         ScrollView {
@@ -42,33 +45,35 @@ struct HomeMenuView: View {
                 // Fixed-width columns matching tileWidth exactly (rather than
                 // .flexible()) so there's no rounding gap between the two
                 // columns or at the screen edges.
-                LazyVGrid(columns: [GridItem(.fixed(tileWidth), spacing: 0), GridItem(.fixed(tileWidth), spacing: 0)], spacing: 0) {
-                    tile(title: "Gauges", imageName: "IconGauge", tint: GETTheme.amber) {
-                        path.append(.gauges)
-                    }
-
-                    tile(title: "Logging", imageName: "IconLog", tint: GETTheme.gold) {
-                        path.append(.logging)
-                    }
-
-                    if transport != nil, !session.isDemoMode {
-                        tile(title: "Flash ECU", imageName: "IconFlash", tint: GETTheme.warningRed) {
-                            session.stopLive()
-                            path.append(.flash)
+                VStack(spacing: 0) {
+                    LazyVGrid(columns: [GridItem(.fixed(tileWidth), spacing: 0), GridItem(.fixed(tileWidth), spacing: 0)], spacing: 0) {
+                        tile(title: "Gauges", imageName: "IconGauge", tint: GETTheme.amber) {
+                            path.append(.gauges)
                         }
 
-                        tile(title: "Diagnostics", imageName: "IconDiag", tint: GETTheme.gold) {
-                            session.stopLive()
-                            path.append(.diagnostics)
+                        tile(title: "Logging", imageName: "IconLog", tint: GETTheme.gold) {
+                            path.append(.logging)
+                        }
+
+                        if transport != nil, !session.isDemoMode {
+                            tile(title: "Flash ECU", imageName: "IconFlash", tint: GETTheme.warningRed) {
+                                session.stopLive()
+                                path.append(.flash)
+                            }
+
+                            tile(title: "Diagnostics", imageName: "IconDiag", tint: GETTheme.gold) {
+                                session.stopLive()
+                                path.append(.diagnostics)
+                            }
                         }
                     }
-                }
 
-                // Performance sits centered under the 2x2 grid.
-                tile(title: "Performance", imageName: "IconPerf", tint: GETTheme.gold) {
-                    path.append(.performance)
+                    // Performance sits centered under the 2x2 grid.
+                    tile(title: "Performance", imageName: "IconPerf", tint: GETTheme.gold) {
+                        path.append(.performance)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
 
                 diagnosticsLinks
 
@@ -94,16 +99,16 @@ struct HomeMenuView: View {
 
     private func tile(title: String, imageName: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 16) {
+            VStack(spacing: 12) {
                 // Custom artwork (Assets.xcassets/Icon*.imageset), shared with
                 // the CarPlay screens.
                 Image(imageName)
                     .resizable()
                     .interpolation(.high)
                     .scaledToFit()
-                    .frame(width: 96, height: 96)
+                    .frame(width: 80, height: 80)
                 Text(title)
-                    .font(.system(size: 22, weight: .bold))
+                    .font(.system(size: 20, weight: .bold))
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
                     .lineLimit(nil)

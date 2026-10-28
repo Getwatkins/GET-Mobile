@@ -12,7 +12,7 @@ extension View {
                 Image("LogoBanner")
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(height: 34 * 1.05) // ~5% larger than the previous 34pt
+                    .frame(height: 42) // larger logo (was ~36pt)
             }
         }
     }
