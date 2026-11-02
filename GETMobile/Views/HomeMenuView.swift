@@ -55,16 +55,17 @@ struct HomeMenuView: View {
                             path.append(.logging)
                         }
 
-                        if transport != nil, !session.isDemoMode {
-                            tile(title: "Flash ECU", imageName: "IconFlash", tint: GETTheme.warningRed) {
-                                session.stopLive()
-                                path.append(.flash)
-                            }
+                        // Always shown, including Demo mode, so every screen can be
+                        // viewed with no vehicle (Demo uses a stub transport that
+                        // can't reach an ECU).
+                        tile(title: "Flash ECU", imageName: "IconFlash", tint: GETTheme.warningRed) {
+                            session.stopLive()
+                            path.append(.flash)
+                        }
 
-                            tile(title: "Diagnostics", imageName: "IconDiag", tint: GETTheme.gold) {
-                                session.stopLive()
-                                path.append(.diagnostics)
-                            }
+                        tile(title: "Diagnostics", imageName: "IconDiag", tint: GETTheme.gold) {
+                            session.stopLive()
+                            path.append(.diagnostics)
                         }
                     }
 

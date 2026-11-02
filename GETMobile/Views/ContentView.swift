@@ -27,6 +27,11 @@ struct ContentView: View {
     }
     private var isConnectedReady: Bool { app.isConnectedReady }
     private var activeTransport: UdsTransport? { app.activeTransport }
+    /// Transport handed to screens. In Demo mode this is a stub that fails every
+    /// request, so all screens can be opened without any vehicle connected.
+    private var screenTransport: UdsTransport? {
+        app.activeTransport ?? (app.demoModeActive ? DemoTransport.shared : nil)
+    }
 
     var body: some View {
         Group {
@@ -112,31 +117,31 @@ struct ContentView: View {
         case .performance:
             PerformanceView(perf: app.performance)
         case .logging:
-            if let transport = activeTransport {
+            if let transport = screenTransport {
                 LoggingMenuView(session: session, transport: transport, path: $path)
             } else {
                 EmptyView()
             }
         case .diagnostics:
-            if let transport = activeTransport {
+            if let transport = screenTransport {
                 DiagnosticsView(diag: diagnostics, gaugeSession: session, transport: transport)
             } else {
                 EmptyView()
             }
         case .flash:
-            if let transport = activeTransport {
+            if let transport = screenTransport {
                 FlashView(session: flashSession, transport: transport, onDone: { path.removeLast() })
             } else {
                 EmptyView()
             }
         case .hslDatalog:
-            if let transport = activeTransport {
+            if let transport = screenTransport {
                 DatalogView(logger: hslLogger, gaugeSession: session, transport: transport)
             } else {
                 EmptyView()
             }
         case .standardDatalog:
-            if let transport = activeTransport {
+            if let transport = screenTransport {
                 DidLoggerView(logger: didLogger, gaugeSession: session, transport: transport)
             } else {
                 EmptyView()

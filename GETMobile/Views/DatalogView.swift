@@ -215,41 +215,52 @@ struct DatalogView: View {
     /// Nothing is pre-selected: the correct file depends on the ECU's software version.
     private var parameterFileSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Parameter File")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.gray)
-                Spacer()
-                Menu {
-                    ForEach(logger.parameterFiles) { file in
-                        Button {
-                            logger.selectParameterFile(file)
-                        } label: {
-                            if logger.selectedFile == file {
-                                Label(file.displayName, systemImage: "checkmark")
-                            } else {
-                                Text(file.displayName)
-                            }
+            Text("Parameter File")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.gray)
+
+            // Large, full-width selector box (same style as the Flash Mode
+            // selector) instead of a tiny inline link.
+            Menu {
+                ForEach(logger.parameterFiles) { file in
+                    Button {
+                        logger.selectParameterFile(file)
+                    } label: {
+                        if logger.selectedFile == file {
+                            Label(file.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(file.displayName)
                         }
                     }
-                    Divider()
-                    Button {
-                        showFileImporter = true
-                    } label: {
-                        Label("Import custom .csv...", systemImage: "square.and.arrow.down")
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Text(logger.selectedFile?.displayName ?? "Select a file...")
-                            .lineLimit(1)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 10))
-                    }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(logger.selectedFile == nil ? GETTheme.warningRed : GETTheme.amber)
                 }
-                .disabled(logger.isRunning || logger.isStarting)
+                Divider()
+                Button {
+                    showFileImporter = true
+                } label: {
+                    Label("Import custom .csv...", systemImage: "square.and.arrow.down")
+                }
+            } label: {
+                HStack {
+                    Text(logger.selectedFile?.displayName ?? "Select a file...")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(logger.selectedFile == nil ? GETTheme.warningRed : .white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(GETTheme.amber)
+                }
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity, minHeight: 60)
+                .background(GETTheme.panelBackground)
+                .overlay(RoundedRectangle(cornerRadius: 10)
+                    .stroke((logger.selectedFile == nil ? GETTheme.warningRed : GETTheme.amber).opacity(0.7), lineWidth: 1.5))
+                .cornerRadius(10)
             }
+            .disabled(logger.isRunning || logger.isStarting)
+            .opacity(logger.isRunning || logger.isStarting ? 0.5 : 1)
+
             Text(parameterFileInfo)
                 .font(.system(size: 11))
                 .foregroundColor(.gray)
